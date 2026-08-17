@@ -47,6 +47,8 @@ struct Layout {
     const lv_font_t* anim_font;      // animated status line
     int16_t anim_y;                  // status line offset from bottom
     bool    small_icons;             // 40px logo + 24px battery (vs 80/48) on small screens
+    bool    minimal_header;          // no title/clock, no logo, no battery meter — the
+                                     // whole header band goes to the usage panels instead
 
     // Media/volume control bar (BoardCaps.has_media_controls — P4 only, see
     // openspec/changes/add-media-volume-controls). Bottom-anchored off scr_h
@@ -73,6 +75,7 @@ struct Layout {
     const lv_font_t* ticker_qod_font_tiny;   // ...and the smallest step
     const lv_font_t* ticker_qod_author_font;
 
+    int16_t idle_offset_y;           // idle-creature CENTER align y-offset (default -20)
     int16_t title_nudge;             // title x-shift balancing the corner logo
     int16_t logo_y;                  // logo top edge
     int16_t batt_y;                  // battery icon top edge
@@ -113,6 +116,7 @@ static void compute_layout(const BoardCaps& c) {
     L.margin = 20;
     L.title_y = 30;
     L.is_round = c.is_round;
+    L.idle_offset_y = -20;  // default; overridden where a control bar eats the space below it
 
     if (c.is_round) {
         // Round panel — usage is two semicircle gauges (top = current, bottom =
@@ -185,7 +189,60 @@ static void compute_layout(const BoardCaps& c) {
         // found here because the P4 sat in it long enough (mid BLE-reconnect
         // debugging) to actually look at it.
         L.idle_px = 160;
-        if (c.has_media_controls) {
+        if (c.has_media_controls && c.height < 700) {
+            // Compact "usage on top half, media on bottom half" — square
+            // boards with media controls but none of the P4's extra vertical
+            // room (that board is 1280 tall; this breakpoint's other numbers
+            // above are tuned for 480). Every constant here is a fresh,
+            // smaller pass rather than a scaled reuse of the 150px panels
+            // above.
+            //
+            // The header (title/clock, corner logo, battery meter) is dropped
+            // entirely rather than shrunk — on a screen this short there's no
+            // header treatment that doesn't eat into the panels, and the
+            // panels are the entire point of the top half. lbl_title/logo_img/
+            // battery_img still get created (see init_usage_screen()/ui_init())
+            // so code that writes through them stays valid; minimal_header
+            // just hides them, same pattern as the round layout hiding its
+            // own unused header elements.
+            L.minimal_header = true;
+            L.content_y = 16;
+            L.usage_panel_h = 106;
+            L.usage_panel_gap = 12;
+            // Percentage number sits at the panel's own (0,0) — see
+            // make_usage_panel() — so usage_bar_y/reset_y both have to clear
+            // its full glyph height before the bar/reset text starts. The
+            // previous pass here (bar at y=28 under a 28pt number) put the
+            // bar right through the numeral's descender; this leaves a clear
+            // ~64px band above the bar for a much bigger 48pt number instead.
+            L.usage_bar_y = 64;
+            L.usage_reset_y = 84;
+            L.bar_h = 14;
+            L.pct_font   = &font_styrene_48;
+            L.reset_font = &font_styrene_16;
+
+            // Two rows of big edge-to-edge rectangles (see build_control_bar):
+            // row 0 — volume: Vol- / Mute / Vol+, a third of the width each
+            // row 1 — transport: Play-Pause / Next, half the width each
+            // Sized smaller than the P4's formula (scr_w/2/2) so the bar plus
+            // its status-line reserve fits the bottom half of a short screen
+            // instead of spilling into the usage panels above it.
+            L.control_btn_gap = 6;
+            L.control_btn_h   = 100;
+            L.control_bar_h   = 2 * L.control_btn_h;
+            // 40px reserve below the bar for the bottom-anchored status line
+            // (font_mono_32, aligned -15 from the screen's bottom edge) — see
+            // the P4's 70px reserve above; this one's just sized for a
+            // shorter screen instead of a proportionally huge one.
+            L.control_bar_y = L.scr_h - L.control_bar_h - 40;
+            // The default -20 centers the idle creature across the whole
+            // idle_group span (content_y..scr_h), which on this breakpoint
+            // reaches down through the control bar — on the P4 that space is
+            // almost entirely empty above the bar so it's a non-issue, but
+            // here the bar eats most of it, so the creature has to be
+            // centered in just the band above the bar instead.
+            L.idle_offset_y = (L.control_bar_y - L.content_y) / 2 - (L.scr_h - L.content_y) / 2;
+        } else if (c.has_media_controls) {
             // Two rows of big edge-to-edge rectangles, sized as fractions of the
             // screen width rather than absolute pixels so the proportions hold on
             // any board that sets the flag:
@@ -678,6 +735,11 @@ static void build_control_bar(lv_obj_t* parent) {
             lv_obj_set_style_pad_all(btn, 0, 0);
             lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+            // Plain lv_obj_t has no themed press feedback at all, so without this
+            // a tap is otherwise silent — no highlight, no click, nothing to tell
+            // the user their touch registered. LVGL applies this automatically on
+            // LV_STATE_PRESSED; no extra event wiring needed.
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x3a3a38), LV_STATE_PRESSED);
             lv_obj_set_user_data(btn, (void*)(intptr_t)CONTROL_BAR_KEYS[key_idx]);
             lv_obj_add_event_cb(btn, control_btn_event_cb, LV_EVENT_PRESSED, NULL);
             lv_obj_add_event_cb(btn, control_btn_event_cb, LV_EVENT_RELEASED, NULL);
@@ -1123,7 +1185,7 @@ static void build_idle_group(lv_obj_t* parent) {
     // sits between the header and the status line; the animated "Listening…"
     // status line carries the words, so no extra text is needed here.
     lv_obj_t* creature = creature_create(idle_group, "expression sleep", L.idle_px);
-    if (creature) lv_obj_align(creature, LV_ALIGN_CENTER, 0, -20);
+    if (creature) lv_obj_align(creature, LV_ALIGN_CENTER, 0, L.idle_offset_y);
 
     lv_obj_add_flag(idle_group, LV_OBJ_FLAG_HIDDEN);  // update_view_state decides
 }
@@ -1152,6 +1214,10 @@ static void init_usage_screen(lv_obj_t* scr) {
     } else {
         lv_obj_set_style_text_font(lbl_title, &font_tiempos_56, 0);
         lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, L.title_y);
+        // Kept alive (not destroyed) for the same reason as the round case
+        // above — ui_tick_anim()'s clock-text code always has a valid target
+        // — just hidden so the whole header band is free for the panels.
+        if (L.minimal_header) lv_obj_add_flag(lbl_title, LV_OBJ_FLAG_HIDDEN);
     }
 
     // Usage panels (shown when connected) live in a transparent full-size group
@@ -1283,6 +1349,10 @@ static void init_usage_screen(lv_obj_t* scr) {
     } else {
         lv_obj_set_style_text_font(lbl_anim, &font_mono_32, 0);
         lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
+        // minimal_header boards drop the whimsical status line entirely — kept
+        // alive (not destroyed) since ui_tick_anim() always writes through it,
+        // same pattern as the hidden title/logo/battery above.
+        if (L.minimal_header) lv_obj_add_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
     }
 
 }
@@ -1305,9 +1375,11 @@ void ui_init(void) {
 
     logo_img = lv_image_create(scr);
     lv_image_set_src(logo_img, &logo_dsc);
-    if (L.is_round) {
+    if (L.is_round || L.minimal_header) {
         // No room for an 80px decorative logo in the round header — the
         // battery meter lives there instead (replacing the title text too).
+        // minimal_header boards drop it outright for the same reason: every
+        // pixel of the header band goes to the usage panels.
         lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_set_pos(logo_img, L.margin, L.title_y - 10);
@@ -1326,6 +1398,7 @@ void ui_init(void) {
         lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_set_pos(battery_img, L.scr_w - 48 - L.margin, L.title_y);
+        if (L.minimal_header) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
     }
 }
 

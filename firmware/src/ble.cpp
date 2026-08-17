@@ -53,11 +53,31 @@ static const uint8_t HID_REPORT_MAP[] = {
     0x29, 0x65,  //   Usage Maximum (101)
     0x81, 0x00,  //   Input (Data, Array) - Key array (6 keys)
     0xC0,        // End Collection
+
+    // Second collection (Report ID 2, Consumer usage page 0x0C) — media/volume
+    // keys for boards with BoardCaps.has_media_controls (waveshare_s3_touch_lcd_4
+    // and any future NimBLE-stack board that sets the flag; the P4 has its own
+    // separate implementation since it can't use NimBLE-Arduino at all — see that
+    // board's ble.cpp). A single 16-bit usage-code selector: press writes the
+    // pressed key's consumer usage code, release writes 0x0000.
+    0x05, 0x0C,        // Usage Page (Consumer)
+    0x09, 0x01,        // Usage (Consumer Control)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, 0x02,        //   Report ID (2)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x03,  //   Logical Maximum (0x3FF)
+    0x19, 0x00,        //   Usage Minimum (0)
+    0x2A, 0xFF, 0x03,  //   Usage Maximum (0x3FF)
+    0x75, 0x10,        //   Report Size (16)
+    0x95, 0x01,        //   Report Count (1)
+    0x81, 0x00,        //   Input (Data, Array)
+    0xC0,              // End Collection
 };
 
 static NimBLEServer* server = nullptr;
 static NimBLEHIDDevice* hid_dev = nullptr;
 static NimBLECharacteristic* input_kbd = nullptr;
+static NimBLECharacteristic* input_consumer = nullptr;  // report ID 2, media/volume keys
 static NimBLECharacteristic* tx_char = nullptr;
 static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
@@ -72,8 +92,20 @@ static const uint16_t DESIRED_TIMEOUT   = 600;   // ×10ms = 6s, matches PPCP
 static volatile uint16_t param_fix_handle = CONN_HANDLE_NONE;  // pending retry
 static volatile uint32_t param_fix_at_ms  = 0;                 // when to send it
 static volatile uint16_t param_fix_spent  = CONN_HANDLE_NONE;  // one per connection
-static char rx_buf[BLE_BUF_SIZE];
-static volatile bool data_ready = false;
+// Small ring buffer, not a single slot: the daemon can send two writes back
+// to back within the same connection event (a usage payload immediately
+// followed by a separate quote-of-the-day write — see parse_json()'s
+// PARSE_MERGE path in main.cpp). A single rx_buf + data_ready flag lets the
+// second write clobber the first before the main loop task ever wakes up to
+// consume it, silently dropping every usage update on boards whose loop()
+// iteration is slow enough to miss the gap between the two writes (confirmed
+// happening 100% of the time on waveshare_s3_touch_lcd_4's heavier RGB-panel
+// flush path). Depth 3 covers that known worst case (2) with headroom.
+#define RX_QUEUE_DEPTH 3
+static char rx_queue[RX_QUEUE_DEPTH][BLE_BUF_SIZE];
+static volatile uint8_t rx_head = 0;   // next slot onWrite() fills
+static volatile uint8_t rx_tail = 0;   // next slot ble_get_data() drains
+static volatile uint8_t rx_count = 0;  // pending, unconsumed messages
 static volatile bool has_received_data = false;
 static char mac_str[18];
 
@@ -325,9 +357,18 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
         }
         std::string val = chr->getValue();
         size_t len = std::min(val.length(), (size_t)(BLE_BUF_SIZE - 1));
-        memcpy(rx_buf, val.c_str(), len);
-        rx_buf[len] = '\0';
-        data_ready = true;
+        if (rx_count >= RX_QUEUE_DEPTH) {
+            // Never observed in practice (worst case is 2 writes/cycle), but
+            // drop the oldest rather than the newest write if it ever happens —
+            // a missed quote update is harmless, a missed usage update isn't.
+            Serial.println("BLE: RX queue full, dropping oldest pending message");
+            rx_tail = (rx_tail + 1) % RX_QUEUE_DEPTH;
+            rx_count--;
+        }
+        memcpy(rx_queue[rx_head], val.c_str(), len);
+        rx_queue[rx_head][len] = '\0';
+        rx_head = (rx_head + 1) % RX_QUEUE_DEPTH;
+        rx_count++;
         has_received_data = true;
     }
 };
@@ -381,6 +422,7 @@ void ble_init(void) {
     hid_dev->setHidInfo(33, 0x02);
     hid_dev->setBatteryLevel(100);
     input_kbd = hid_dev->getInputReport(1);  // report ID 1
+    input_consumer = hid_dev->getInputReport(2);  // report ID 2, media/volume keys
 
     // --- Custom data service ---
     NimBLEService* svc = server->createService(SERVICE_UUID);
@@ -456,12 +498,22 @@ bool ble_has_bonds(void) {
 }
 
 bool ble_has_data(void) {
-    return data_ready;
+    return rx_count > 0;
 }
 
 const char* ble_get_data(void) {
-    data_ready = false;
-    return rx_buf;
+    // Static, not a reference into rx_queue: the caller (main.cpp's loop())
+    // holds this pointer across parse_json() while onWrite() can advance
+    // rx_head/refill other slots concurrently on the BLE host task.
+    static char out_buf[BLE_BUF_SIZE];
+    if (rx_count == 0) {
+        out_buf[0] = '\0';
+        return out_buf;
+    }
+    strlcpy(out_buf, rx_queue[rx_tail], sizeof(out_buf));
+    rx_tail = (rx_tail + 1) % RX_QUEUE_DEPTH;
+    rx_count--;
+    return out_buf;
 }
 
 void ble_send_ack(void) {
@@ -508,10 +560,34 @@ void ble_keyboard_release(void) {
     input_kbd->notify();
 }
 
-// Deliberate no-op on every board that links this file — BoardCaps.has_media_controls
-// is false everywhere shared ble.cpp is used, so these are never reached in practice.
-// Real implementation (second HID report, Report ID 2, Consumer usage page) lives in
-// boards/waveshare_p4_touch_lcd_5/ble.cpp; mirror that report map here first if a
-// future board ever enables this flag on the NimBLE stack.
-void ble_consumer_press(ble_consumer_key_t key) { (void)key; }
-void ble_consumer_release(void) {}
+// Real Consumer Control implementation — reached only on boards with
+// BoardCaps.has_media_controls (waveshare_s3_touch_lcd_4 today), since that
+// flag is what makes ui.cpp build the touch buttons that call these at all.
+// Inert everywhere else. The P4 has its own separate implementation against
+// a different BLE library (see boards/waveshare_p4_touch_lcd_5/ble.cpp) —
+// NimBLE-Arduino doesn't build for that board at all.
+static uint16_t consumer_usage_code(ble_consumer_key_t key) {
+    switch (key) {
+        case BLE_CONSUMER_VOLUME_UP:   return 0x00E9;
+        case BLE_CONSUMER_VOLUME_DOWN: return 0x00EA;
+        case BLE_CONSUMER_MUTE:        return 0x00E2;
+        case BLE_CONSUMER_PLAY_PAUSE:  return 0x00CD;
+        case BLE_CONSUMER_NEXT_TRACK:  return 0x00B5;
+    }
+    return 0;
+}
+
+void ble_consumer_press(ble_consumer_key_t key) {
+    if (state != BLE_STATE_CONNECTED || !input_consumer) return;
+    uint16_t code = consumer_usage_code(key);
+    uint8_t report[2] = {(uint8_t)(code & 0xFF), (uint8_t)(code >> 8)};
+    input_consumer->setValue(report, sizeof(report));
+    input_consumer->notify();
+}
+
+void ble_consumer_release(void) {
+    if (state != BLE_STATE_CONNECTED || !input_consumer) return;
+    uint8_t report[2] = {0, 0};
+    input_consumer->setValue(report, sizeof(report));
+    input_consumer->notify();
+}

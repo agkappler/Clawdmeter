@@ -418,7 +418,12 @@ void loop() {
 
     check_serial_cmd();
 
-    if (ble_has_data()) {
+    // while, not if: the daemon can send a usage payload immediately followed
+    // by a separate quote-of-the-day write in the same connection event (see
+    // ble.cpp's RX queue comment) — draining only one per loop iteration would
+    // leave the second sitting queued for an extra ~loop-time with stale data
+    // still on screen, and on a slow enough loop the queue could back up.
+    while (ble_has_data()) {
         parse_result_t res = parse_json(ble_get_data(), &usage);
         if (res == PARSE_ERROR) {
             ble_send_nack();
