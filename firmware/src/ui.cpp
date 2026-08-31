@@ -36,6 +36,13 @@ struct Layout {
     int16_t usage_bar_y;
     int16_t usage_reset_y;
     int16_t bar_h;
+
+    // Combined Current/Weekly panel + center pomodoro timer (square "large"
+    // boards only — AMOLED-2.16, AMOLED-2.16-C6, and the S3-Touch-LCD-4's top
+    // half; see compute_layout and make_combined_usage_panel). When false the
+    // two-separate-panels layout above (usage_panel_h et al.) is used instead.
+    bool    combined_layout;
+    int16_t combined_panel_h;
     int16_t panel_pad_x, panel_pad_y;
     int16_t pill_pad_x, pill_pad_y;
     const lv_font_t* title_font;     // screen title / clock
@@ -242,6 +249,10 @@ static void compute_layout(const BoardCaps& c) {
             // here the bar eats most of it, so the creature has to be
             // centered in just the band above the bar instead.
             L.idle_offset_y = (L.control_bar_y - L.content_y) / 2 - (L.scr_h - L.content_y) / 2;
+            // Top half becomes the combined panel + pomodoro instead of two
+            // stacked 106px panels — the media bar below is untouched.
+            L.combined_layout = true;
+            L.combined_panel_h = 210;
         } else if (c.has_media_controls) {
             // Two rows of big edge-to-edge rectangles, sized as fractions of the
             // screen width rather than absolute pixels so the proportions hold on
@@ -261,6 +272,13 @@ static void compute_layout(const BoardCaps& c) {
             // bar mid-screen with hundreds of pixels of dead space below it. Leaves
             // room for the independently bottom-anchored status line.
             L.control_bar_y = L.scr_h - L.control_bar_h - 70;
+        } else {
+            // Plain square board, no media controls (AMOLED-2.16 / -2.16-C6):
+            // Current/Weekly combine into one panel with a center pomodoro
+            // timer instead of two separate 150px panels — see
+            // make_combined_usage_panel().
+            L.combined_layout = true;
+            L.combined_panel_h = 200;
         }
     } else if (c.height >= 300) {
         // Compact layout — tuned for 368x448 (AMOLED-1.8).
@@ -333,7 +351,9 @@ static void compute_layout(const BoardCaps& c) {
     // is purely decorative, and "is there a big empty band here" is exactly the
     // question being asked. Today only the 1280-tall P4 clears the bar — every
     // other board's gap is a few dozen pixels, so they're untouched.
-    const int16_t panels_end = L.content_y + 2 * L.usage_panel_h + L.usage_panel_gap;
+    const int16_t panels_end = L.combined_layout
+        ? (int16_t)(L.content_y + L.combined_panel_h)
+        : (int16_t)(L.content_y + 2 * L.usage_panel_h + L.usage_panel_gap);
     const int16_t bottom_limit = (L.control_bar_h > 0) ? L.control_bar_y
                                                        : (int16_t)(L.scr_h - 70);
     const int16_t avail = bottom_limit - panels_end;
@@ -1128,6 +1148,201 @@ static lv_obj_t* make_usage_panel(lv_obj_t* parent, int y, const char* pill_text
     return panel;
 }
 
+// ======== Pomodoro timer (combined-layout boards only) ========
+// A single always-running 25:00 countdown centered in the combined usage
+// panel. lbl_pomodoro stays null on every board that doesn't set
+// L.combined_layout, and every function below no-ops in that case, so this
+// costs nothing on boards without room for it.
+#define POMODORO_START_SEC      (25 * 60)
+#define POMODORO_FLASH_MS       500
+#define POMODORO_DOUBLE_TAP_MS  400
+
+static lv_obj_t* lbl_pomodoro = nullptr;
+static int32_t   pomodoro_remaining_sec = POMODORO_START_SEC;
+static uint32_t  pomodoro_last_tick_ms = 0;
+static bool      pomodoro_flashing = false;
+static bool      pomodoro_flash_on = true;
+static uint32_t  pomodoro_flash_last_ms = 0;
+static uint32_t  pomodoro_last_click_ms = 0;  // hand-rolled double-tap detection
+
+static void render_pomodoro(void) {
+    if (!lbl_pomodoro) return;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%02d:%02d",
+             (int)(pomodoro_remaining_sec / 60), (int)(pomodoro_remaining_sec % 60));
+    lv_label_set_text(lbl_pomodoro, buf);
+}
+
+// Flips the whole screen background plus the combined panel's own background
+// (which covers most of the visible area on these boards) between normal and
+// alarm-red — a text-only flash on a 32pt readout wasn't a strong enough cue
+// to notice from across a desk. panel_session is null the very first time
+// this runs (pomodoro_reset() fires from inside make_combined_usage_panel(),
+// before init_usage_screen() has assigned it), so it's guarded.
+static void pomodoro_set_flash(bool on) {
+    lv_obj_set_style_bg_color(lv_screen_active(), on ? COL_RED : COL_BG, 0);
+    if (panel_session) lv_obj_set_style_bg_color(panel_session, on ? COL_RED : COL_PANEL, 0);
+}
+
+static void pomodoro_reset(void) {
+    pomodoro_remaining_sec = POMODORO_START_SEC;
+    pomodoro_flashing = false;
+    pomodoro_flash_on = false;
+    pomodoro_set_flash(false);
+    pomodoro_last_tick_ms = lv_tick_get();
+    render_pomodoro();
+}
+
+// A tap while flashing (timer hit zero) resets it immediately. Otherwise a
+// tap only resets on the second half of a double-tap — a stray single tap
+// during a normal countdown shouldn't be able to wipe out progress.
+static void pomodoro_click_cb(lv_event_t* e) {
+    (void)e;
+    uint32_t now = lv_tick_get();
+    if (pomodoro_flashing) {
+        pomodoro_reset();
+        pomodoro_last_click_ms = 0;
+        return;
+    }
+    if (pomodoro_last_click_ms != 0 && now - pomodoro_last_click_ms <= POMODORO_DOUBLE_TAP_MS) {
+        pomodoro_reset();
+        pomodoro_last_click_ms = 0;
+    } else {
+        pomodoro_last_click_ms = now;
+    }
+}
+
+// Called every loop from ui_tick_anim(). Counts down once per second while
+// running; once it reaches zero it stops counting and just flashes the whole
+// screen red (see pomodoro_set_flash) until pomodoro_click_cb() resets it.
+static void pomodoro_tick(uint32_t now) {
+    if (!lbl_pomodoro) return;
+    if (pomodoro_flashing) {
+        if (now - pomodoro_flash_last_ms >= POMODORO_FLASH_MS) {
+            pomodoro_flash_last_ms = now;
+            pomodoro_flash_on = !pomodoro_flash_on;
+            pomodoro_set_flash(pomodoro_flash_on);
+        }
+        return;
+    }
+    if (now - pomodoro_last_tick_ms < 1000) return;
+    pomodoro_last_tick_ms += 1000;
+    if (pomodoro_remaining_sec > 0) pomodoro_remaining_sec--;
+    render_pomodoro();
+    if (pomodoro_remaining_sec <= 0) {
+        pomodoro_flashing = true;
+        pomodoro_flash_last_ms = now;
+        pomodoro_flash_on = true;
+        pomodoro_set_flash(true);   // paint the first flash now, not after the first interval
+    }
+}
+
+// The mm:ss readout plus its (generously sized, larger than the glyphs
+// themselves) invisible tap target — a label alone has too small a hit box
+// to reliably catch a fingertip.
+static void build_pomodoro(lv_obj_t* parent, int16_t y) {
+    lv_obj_t* hit = lv_obj_create(parent);
+    lv_obj_set_size(hit, 120, 64);
+    lv_obj_set_pos(hit, (L.content_w - 120) / 2, y);
+    lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(hit, 0, 0);
+    lv_obj_set_style_pad_all(hit, 0, 0);
+    lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(hit, pomodoro_click_cb, LV_EVENT_CLICKED, NULL);
+
+    lbl_pomodoro = lv_label_create(hit);
+    lv_obj_set_style_text_font(lbl_pomodoro, &font_mono_32, 0);
+    lv_obj_set_style_text_color(lbl_pomodoro, COL_TEXT, 0);
+    lv_obj_center(lbl_pomodoro);
+
+    // Anchors pomodoro_last_tick_ms to now — left at its zero-init value, the
+    // first few ui_tick_anim() calls would read boot-up time itself as
+    // elapsed countdown seconds and skip the timer forward that much.
+    pomodoro_reset();
+}
+
+// Combined Current/Weekly panel — square "large" boards only (see
+// compute_layout). Current sits left, Weekly sits right, their bars stack
+// directly on top of each other instead of living in two separate panels,
+// and the pomodoro timer occupies the middle of the number row. One shared
+// set of internal offsets serves every board that sets L.combined_layout;
+// `h` differs slightly per board (see compute_layout) but ~154px of content
+// fits comfortably under any of them.
+#define COMBINED_PCT_Y      34
+#define COMBINED_POMODORO_Y 42
+#define COMBINED_BAR1_Y     96
+#define COMBINED_BAR_H      14
+#define COMBINED_BAR_GAP    4
+#define COMBINED_RESET_Y    138
+
+static lv_obj_t* make_combined_usage_panel(lv_obj_t* parent, int y, int h) {
+    lv_obj_t* panel = make_panel(parent, L.margin, y, L.content_w, h);
+    const int16_t bar_w = L.content_w - 2 * L.panel_pad_x;
+
+    lbl_session_label = make_pill(panel, "Current", &font_styrene_20);
+    lv_obj_align(lbl_session_label, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lbl_weekly_label = make_pill(panel, "Weekly", &font_styrene_20);
+    lv_obj_align(lbl_weekly_label, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+    lbl_session_pct = lv_label_create(panel);
+    lv_label_set_text(lbl_session_pct, "---%");
+    lv_obj_set_style_text_font(lbl_session_pct, L.pct_font, 0);
+    lv_obj_set_style_text_color(lbl_session_pct, COL_TEXT, 0);
+    lv_obj_align(lbl_session_pct, LV_ALIGN_TOP_LEFT, 0, COMBINED_PCT_Y);
+
+    lbl_weekly_pct = lv_label_create(panel);
+    lv_label_set_text(lbl_weekly_pct, "---%");
+    lv_obj_set_style_text_font(lbl_weekly_pct, L.pct_font, 0);
+    lv_obj_set_style_text_color(lbl_weekly_pct, COL_TEXT, 0);
+    lv_obj_align(lbl_weekly_pct, LV_ALIGN_TOP_RIGHT, 0, COMBINED_PCT_Y);
+
+    build_pomodoro(panel, COMBINED_POMODORO_Y);
+
+    // Current on top, weekly directly beneath it — "on top of each other"
+    // rather than the wide vertical gap the two-panel layout used.
+    bar_session = make_bar(panel, 0, COMBINED_BAR1_Y, bar_w, COMBINED_BAR_H);
+    bar_weekly  = make_bar(panel, 0, COMBINED_BAR1_Y + COMBINED_BAR_H + COMBINED_BAR_GAP,
+                           bar_w, COMBINED_BAR_H);
+
+    lbl_session_reset = lv_label_create(panel);
+    lv_label_set_text(lbl_session_reset, "---");
+    lv_obj_set_style_text_font(lbl_session_reset, L.reset_font, 0);
+    lv_obj_set_style_text_color(lbl_session_reset, COL_DIM, 0);
+    lv_obj_align(lbl_session_reset, LV_ALIGN_TOP_LEFT, 0, COMBINED_RESET_Y);
+
+    lbl_weekly_reset = lv_label_create(panel);
+    lv_label_set_text(lbl_weekly_reset, "---");
+    lv_obj_set_style_text_font(lbl_weekly_reset, L.reset_font, 0);
+    lv_obj_set_style_text_color(lbl_weekly_reset, COL_DIM, 0);
+    lv_obj_align(lbl_weekly_reset, LV_ALIGN_TOP_RIGHT, 0, COMBINED_RESET_Y);
+
+    // Enterprise-only overlays, same roles as make_usage_panel()'s — parented
+    // here and anchored under the left (Current/Spending) side since that's
+    // where the spending number lives in this layout too.
+    lbl_session_pct_sym = lv_label_create(panel);
+    lv_label_set_text(lbl_session_pct_sym, "%");
+    lv_obj_set_style_text_font(lbl_session_pct_sym, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(lbl_session_pct_sym, COL_TEXT, 0);
+    lv_obj_add_flag(lbl_session_pct_sym, LV_OBJ_FLAG_HIDDEN);
+
+    lbl_spending_desc = lv_label_create(panel);
+    lv_label_set_text(lbl_spending_desc, "of your monthly budget");
+    lv_obj_set_style_text_font(lbl_spending_desc, &font_styrene_14, 0);
+    lv_obj_set_style_text_color(lbl_spending_desc, COL_DIM, 0);
+    lv_obj_align(lbl_spending_desc, LV_ALIGN_TOP_LEFT, 0, COMBINED_RESET_Y);
+    lv_obj_add_flag(lbl_spending_desc, LV_OBJ_FLAG_HIDDEN);
+
+    lbl_spending_status = lv_label_create(panel);
+    lv_label_set_text(lbl_spending_status, "");
+    lv_obj_set_style_text_font(lbl_spending_status, &font_styrene_12, 0);
+    lv_obj_align(lbl_spending_status, LV_ALIGN_TOP_LEFT, 0, COMBINED_RESET_Y + 16);
+    lv_obj_add_flag(lbl_spending_status, LV_OBJ_FLAG_HIDDEN);
+
+    return panel;
+}
+
 // Pairing hint — shown when disconnected so the screen isn't empty and the
 // user knows how to (re)pair. Wording matches the 3-second release gesture.
 static void build_pair_group(lv_obj_t* parent) {
@@ -1282,6 +1497,18 @@ static void init_usage_screen(lv_obj_t* scr) {
             lv_obj_clear_flag(divider, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_flag(divider, LV_OBJ_FLAG_EVENT_BUBBLE);
         }
+    } else if (L.combined_layout) {
+        // Current + Weekly + pomodoro all in one panel — see
+        // make_combined_usage_panel(). panel_session/panel_weekly both point
+        // at the same object so the show/hide calls in ui_update() (written
+        // for the two-separate-panels layout) stay harmless no-ops here.
+        panel_session = make_combined_usage_panel(usage_group, L.content_y, L.combined_panel_h);
+        panel_weekly = panel_session;
+
+        // No center rotator on combined-layout boards: the pomodoro timer
+        // already occupies the one bit of prime real estate a rotator would
+        // want, and neither board that sets combined_layout clears the 240px
+        // slack build_ticker_panel needs anyway (L.ticker_h stays 0).
     } else {
         panel_session = make_usage_panel(usage_group, L.content_y, "Current",
                          &lbl_session_pct, &lbl_session_label,
@@ -1311,19 +1538,23 @@ static void init_usage_screen(lv_obj_t* scr) {
                          L.content_y + L.usage_panel_h + L.usage_panel_gap, "Weekly",
                          &lbl_weekly_pct, &lbl_weekly_label,
                          &bar_weekly, &lbl_weekly_reset);
-
-        // Center rotator, in usage_group (unlike the media bar below): its quotes
-        // are only as fresh as the payload that carried them, so it belongs with
-        // the numbers that go away when data goes stale.
-        if (L.ticker_h > 0) build_ticker_panel(usage_group);
-
-        // Parented to usage_container, NOT usage_group: the media/volume controls have
-        // nothing to do with usage data, but usage_group is hidden whenever data goes
-        // stale — which made the buttons disappear behind the idle "Listening…" screen
-        // exactly when you'd still want to change the volume. update_view_state() hides
-        // this only when BLE is down (the pairing view), where presses can't work anyway.
-        if (board_caps().has_media_controls) build_control_bar(usage_container);
     }
+
+    // Center rotator, in usage_group (unlike the media bar below): its quotes are
+    // only as fresh as the payload that carried them, so it belongs with the
+    // numbers that go away when data goes stale. L.ticker_h stays 0 on round and
+    // combined-layout boards (neither clears the slack it needs), so this is a
+    // no-op there.
+    if (L.ticker_h > 0) build_ticker_panel(usage_group);
+
+    // Parented to usage_container, NOT usage_group: the media/volume controls have
+    // nothing to do with usage data, but usage_group is hidden whenever data goes
+    // stale — which made the buttons disappear behind the idle "Listening…" screen
+    // exactly when you'd still want to change the volume. update_view_state() hides
+    // this only when BLE is down (the pairing view), where presses can't work anyway.
+    // Applies to the combined-layout branch too (S3-Touch-LCD-4's bottom half).
+    if (board_caps().has_media_controls) build_control_bar(usage_container);
+
     // Recolor enabled so enterprise period box can color pace and reset separately
     lv_label_set_recolor(lbl_weekly_reset, true);
 
@@ -1530,6 +1761,7 @@ void ui_tick_anim(void) {
     uint32_t now = lv_tick_get();
 
     ticker_tick(now);
+    pomodoro_tick(now);
 
     // Title clock: once the daemon has sent wall-clock time, replace "Usage" with
     // the live time, advanced locally so it ticks every minute between payloads.
