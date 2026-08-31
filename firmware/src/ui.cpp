@@ -1164,6 +1164,7 @@ static bool      pomodoro_flashing = false;
 static bool      pomodoro_flash_on = true;
 static uint32_t  pomodoro_flash_last_ms = 0;
 static uint32_t  pomodoro_last_click_ms = 0;  // hand-rolled double-tap detection
+static bool      pomodoro_stopped = false;    // long-press toggle — see pomodoro_longpress_cb
 
 static void render_pomodoro(void) {
     if (!lbl_pomodoro) return;
@@ -1171,6 +1172,13 @@ static void render_pomodoro(void) {
     snprintf(buf, sizeof(buf), "%02d:%02d",
              (int)(pomodoro_remaining_sec / 60), (int)(pomodoro_remaining_sec % 60));
     lv_label_set_text(lbl_pomodoro, buf);
+}
+
+// Dims the digits while stopped so the frozen readout doesn't look like a
+// live countdown that's simply not moving.
+static void pomodoro_set_stopped_visual(bool stopped) {
+    if (!lbl_pomodoro) return;
+    lv_obj_set_style_text_color(lbl_pomodoro, stopped ? COL_DIM : COL_TEXT, 0);
 }
 
 // Flips the whole screen background plus the combined panel's own background
@@ -1184,18 +1192,24 @@ static void pomodoro_set_flash(bool on) {
     if (panel_session) lv_obj_set_style_bg_color(panel_session, on ? COL_RED : COL_PANEL, 0);
 }
 
+// Also clears the long-press-stopped state: double-tapping to reset is
+// meant to hand back a fresh, running 25:00, not a fresh-but-still-paused one.
 static void pomodoro_reset(void) {
     pomodoro_remaining_sec = POMODORO_START_SEC;
     pomodoro_flashing = false;
     pomodoro_flash_on = false;
     pomodoro_set_flash(false);
     pomodoro_last_tick_ms = lv_tick_get();
+    pomodoro_stopped = false;
+    pomodoro_set_stopped_visual(false);
     render_pomodoro();
 }
 
 // A tap while flashing (timer hit zero) resets it immediately. Otherwise a
 // tap only resets on the second half of a double-tap — a stray single tap
-// during a normal countdown shouldn't be able to wipe out progress.
+// during a normal countdown shouldn't be able to wipe out progress. LVGL
+// still fires LV_EVENT_SHORT_CLICKED after a long-press release goes through
+// pomodoro_longpress_cb below, so this never double-fires with that gesture.
 static void pomodoro_click_cb(lv_event_t* e) {
     (void)e;
     uint32_t now = lv_tick_get();
@@ -1212,11 +1226,39 @@ static void pomodoro_click_cb(lv_event_t* e) {
     }
 }
 
+// Long press toggles the timer off/on — the only way to silence it if you
+// don't want a pomodoro alarm running at all right now. Stopping mid-alarm
+// freezes at 0:00 and silences the flash; stopping mid-countdown just
+// freezes wherever it was. Resuming re-anchors pomodoro_last_tick_ms to now
+// rather than wherever it was left, so a long pause doesn't get "caught up"
+// in one instant burst of decrements when it's turned back on — and if it
+// was already expired when stopped, resuming immediately resumes the alarm
+// too, since the timer is still just as expired as it was.
+static void pomodoro_longpress_cb(lv_event_t* e) {
+    (void)e;
+    pomodoro_stopped = !pomodoro_stopped;
+    if (pomodoro_stopped) {
+        pomodoro_flashing = false;
+        pomodoro_flash_on = false;
+        pomodoro_set_flash(false);
+    } else {
+        pomodoro_last_tick_ms = lv_tick_get();
+        if (pomodoro_remaining_sec <= 0) {
+            pomodoro_flashing = true;
+            pomodoro_flash_last_ms = lv_tick_get();
+            pomodoro_flash_on = true;
+            pomodoro_set_flash(true);
+        }
+    }
+    pomodoro_set_stopped_visual(pomodoro_stopped);
+}
+
 // Called every loop from ui_tick_anim(). Counts down once per second while
 // running; once it reaches zero it stops counting and just flashes the whole
 // screen red (see pomodoro_set_flash) until pomodoro_click_cb() resets it.
+// No-ops entirely while pomodoro_longpress_cb() has stopped the timer.
 static void pomodoro_tick(uint32_t now) {
-    if (!lbl_pomodoro) return;
+    if (!lbl_pomodoro || pomodoro_stopped) return;
     if (pomodoro_flashing) {
         if (now - pomodoro_flash_last_ms >= POMODORO_FLASH_MS) {
             pomodoro_flash_last_ms = now;
@@ -1249,7 +1291,11 @@ static void build_pomodoro(lv_obj_t* parent, int16_t y) {
     lv_obj_set_style_pad_all(hit, 0, 0);
     lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(hit, pomodoro_click_cb, LV_EVENT_CLICKED, NULL);
+    // SHORT_CLICKED (not CLICKED) so a long-press release doesn't also fire
+    // the tap/double-tap reset logic — LVGL fires CLICKED regardless of
+    // whether the press was long, but SHORT_CLICKED only when it wasn't.
+    lv_obj_add_event_cb(hit, pomodoro_click_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_event_cb(hit, pomodoro_longpress_cb, LV_EVENT_LONG_PRESSED, NULL);
 
     lbl_pomodoro = lv_label_create(hit);
     lv_obj_set_style_text_font(lbl_pomodoro, &font_mono_32, 0);
