@@ -45,12 +45,17 @@ void display_hal_init(void) {
         // examples use.
         LCD_WIDTH * 10 /* bounce_buffer_size_px */);
 
-    // rotation=2 matches Waveshare's own example — the panel's native mount
-    // reads upside-down relative to how the board sits right-side up.
-    // Fixed at build time (no runtime rotation on this board); touch.cpp
-    // applies the matching coordinate flip.
+    // rotation=1 (90° CCW from Waveshare's own rotation=2 default) — mounted
+    // with the USB/power port on the bottom edge instead of the right, per
+    // this board's physical placement. Arduino_RGB_Display remaps pixels for
+    // every rotation value in software (unlike the CO5300's QSPI panel,
+    // which can only flip axes — see CLAUDE.md gotcha #1), so this is a
+    // plain parameter change; the panel being square (480x480) means no
+    // width/height swap is needed anywhere else. Fixed at build time (no
+    // runtime rotation on this board); touch.cpp applies the matching
+    // coordinate transform for rotation=1.
     gfx = new Arduino_RGB_Display(
-        LCD_WIDTH, LCD_HEIGHT, rgbpanel, 2 /* rotation */, true /* auto_flush */,
+        LCD_WIDTH, LCD_HEIGHT, rgbpanel, 1 /* rotation */, true /* auto_flush */,
         bus, GFX_NOT_DEFINED /* RST — via CH32 helper */,
         st7701_type1_init_operations, sizeof(st7701_type1_init_operations));
 }

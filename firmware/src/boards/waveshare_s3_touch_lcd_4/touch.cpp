@@ -14,11 +14,11 @@
 //   reg 0x814F: point 1 record (8 bytes) — [track_id, xL, xH, yL, yH, sL, sH, rsvd]
 //   Little-endian coordinate pairs, record starting at 0x814F.
 //
-// The panel is driven at a fixed rotation=2 in display.cpp (matches
-// Waveshare's own example — the panel mounts upside-down relative to the
-// board's right-side-up orientation), so raw GT911 coordinates are flipped
-// on both axes here to land in the same "display" coordinate space the rest
-// of the HAL contract expects.
+// The panel is driven at a fixed rotation=1 in display.cpp (USB/power port
+// mounted on the bottom edge), so raw GT911 coordinates are transformed here
+// to match — same case-1 mapping as Waveshare's own example's touch handler
+// (touchX = rawY, touchY = height - rawX), just applied unconditionally
+// since this board's rotation never changes at runtime.
 
 static uint8_t gt911_addr = 0;
 
@@ -79,9 +79,9 @@ static bool gt911_read_point(uint16_t* out_x, uint16_t* out_y) {
     uint16_t raw_x = (uint16_t)rec[1] | ((uint16_t)rec[2] << 8);
     uint16_t raw_y = (uint16_t)rec[3] | ((uint16_t)rec[4] << 8);
 
-    // Flip both axes to match the panel's fixed rotation=2 (see file header).
-    *out_x = (raw_x < LCD_WIDTH)  ? (LCD_WIDTH  - raw_x) : 0;
-    *out_y = (raw_y < LCD_HEIGHT) ? (LCD_HEIGHT - raw_y) : 0;
+    // rotation=1 mapping (see file header): touchX = rawY, touchY = height - rawX.
+    *out_x = raw_y;
+    *out_y = (raw_x < LCD_HEIGHT) ? (LCD_HEIGHT - raw_x) : 0;
     return true;
 }
 
