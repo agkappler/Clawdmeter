@@ -20,6 +20,23 @@ struct QuoteData {
 #define MAX_QOD_TEXT 320
 #define MAX_QOD_AUTHOR 32
 
+// Claude Code session status, sent by the daemon as its own "ss" write (see
+// daemon/session_status.py). Sizes match the daemon's HOST_MAX / NAME_MAX /
+// MAX_SESSIONS; text is ASCII-folded host-side for the bundled fonts.
+#define MAX_SESSIONS 6
+enum session_state_t : uint8_t {
+    SESSION_WORKING = 0,
+    SESSION_NEEDS_YOU = 1,
+    SESSION_YOUR_TURN = 2,
+    SESSION_STALE = 3,
+};
+
+struct SessionData {
+    char host[9];     // machine tag, e.g. "wsl"
+    char name[21];    // session title or project folder, e.g. "api#2"
+    uint8_t state;    // session_state_t
+};
+
 struct UsageData {
     float session_pct;       // utilization 0-100 (5h window Pro/Max; spending % Enterprise)
     int session_reset_mins;  // minutes until reset
@@ -43,6 +60,10 @@ struct UsageData {
     int  quote_count;        // number of populated entries in quotes[]
     char qod_text[MAX_QOD_TEXT];      // quote of the day; empty = not provided
     char qod_author[MAX_QOD_AUTHOR];  // its author; may be empty even with text
+    // Session status. Only an "ss" field ever changes these, never a usage
+    // payload without one, so a usage write can't wipe the list.
+    SessionData sessions[MAX_SESSIONS];
+    int  session_count;
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
 };

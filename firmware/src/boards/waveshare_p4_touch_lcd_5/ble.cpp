@@ -90,8 +90,15 @@ static const uint16_t DESIRED_TIMEOUT   = 600;   // x10ms = 6s, matches PPCP
 static volatile uint16_t param_fix_handle = CONN_HANDLE_NONE;
 static volatile uint32_t param_fix_at_ms  = 0;
 static volatile uint16_t param_fix_spent  = CONN_HANDLE_NONE;
-static char rx_buf[BLE_BUF_SIZE];
-static volatile bool data_ready = false;
+// Ring buffer, same as shared ble.cpp (see its comment for the history): the
+// daemon sends a usage write, an optional quote write and a session-status
+// write back to back, and a single buffer let each overwrite the last before
+// loop() woke up. Depth 4 holds that worst case of 3 with one to spare.
+#define RX_QUEUE_DEPTH 4
+static char rx_queue[RX_QUEUE_DEPTH][BLE_BUF_SIZE];
+static volatile uint8_t rx_head = 0;   // next slot onWrite() fills
+static volatile uint8_t rx_tail = 0;   // next slot ble_get_data() drains
+static volatile uint8_t rx_count = 0;  // pending, unconsumed messages
 static volatile bool has_received_data = false;
 static char mac_str[18];
 
@@ -273,9 +280,15 @@ class RxCallbacks : public BLECharacteristicCallbacks {
         }
         String val = chr->getValue();
         size_t len = std::min((size_t)val.length(), (size_t)(BLE_BUF_SIZE - 1));
-        memcpy(rx_buf, val.c_str(), len);
-        rx_buf[len] = '\0';
-        data_ready = true;
+        if (rx_count >= RX_QUEUE_DEPTH) {
+            Serial.println("BLE: RX queue full, dropping oldest pending message");
+            rx_tail = (rx_tail + 1) % RX_QUEUE_DEPTH;
+            rx_count--;
+        }
+        memcpy(rx_queue[rx_head], val.c_str(), len);
+        rx_queue[rx_head][len] = '\0';
+        rx_head = (rx_head + 1) % RX_QUEUE_DEPTH;
+        rx_count++;
         has_received_data = true;
     }
 };
@@ -466,12 +479,21 @@ bool ble_has_bonds(void) {
 }
 
 bool ble_has_data(void) {
-    return data_ready;
+    return rx_count > 0;
 }
 
 const char* ble_get_data(void) {
-    data_ready = false;
-    return rx_buf;
+    // A copy, not a pointer into rx_queue: loop() holds it across parse_json()
+    // while onWrite() can refill slots on the BLE host task.
+    static char out_buf[BLE_BUF_SIZE];
+    if (rx_count == 0) {
+        out_buf[0] = '\0';
+        return out_buf;
+    }
+    strlcpy(out_buf, rx_queue[rx_tail], sizeof(out_buf));
+    rx_tail = (rx_tail + 1) % RX_QUEUE_DEPTH;
+    rx_count--;
+    return out_buf;
 }
 
 void ble_send_ack(void) {

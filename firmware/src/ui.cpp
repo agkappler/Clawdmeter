@@ -443,6 +443,13 @@ static uint32_t  ticker_card_ms = 0;     // when the current card came up
 static int       ticker_clock_sec = -1;  // last second rendered on the clock card
 static bool      ticker_dirty = true;    // re-render pending (new card or new data)
 #define TICKER_CARD_MS 6000              // dwell per card
+// Session status (see ui_update_sessions). Kept apart from usage freshness: the
+// list has its own liveness, based on the daemon's 60 s "ss" heartbeat.
+static SessionData sess_rows[MAX_SESSIONS] = {};
+static int         sess_count = 0;
+static uint32_t    sess_last_ms = 0;      // lv_tick when the last "ss" write landed
+static bool        sess_received = false; // any "ss" write since boot
+static bool        sess_dirty = false;    // re-render pending
 // The quote card is a paragraph, not a number — 6s isn't enough to read one.
 #define TICKER_QOD_MS  12000
 #define TICKER_FADE_MS 300
@@ -1677,6 +1684,22 @@ void ui_init(void) {
         lv_obj_set_pos(battery_img, L.scr_w - 48 - L.margin, L.title_y);
         if (L.minimal_header) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+void ui_update_quote_of_day(const char* text, const char* author) {
+    strlcpy(ticker_qod_text, text, sizeof(ticker_qod_text));
+    strlcpy(ticker_qod_author, author, sizeof(ticker_qod_author));
+    ticker_dirty = true;   // refresh the visible card in place if it's the quote
+}
+
+void ui_update_sessions(const SessionData* sessions, int count) {
+    if (count < 0) count = 0;
+    if (count > MAX_SESSIONS) count = MAX_SESSIONS;
+    for (int i = 0; i < count; i++) sess_rows[i] = sessions[i];
+    sess_count = count;
+    sess_last_ms = lv_tick_get();
+    sess_received = true;
+    sess_dirty = true;   // drawn by the session list (task 6 of add-session-status)
 }
 
 void ui_update(const UsageData* data) {

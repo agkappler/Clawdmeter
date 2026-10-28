@@ -96,14 +96,40 @@ static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     }
 }
 
-// Outcome of parsing one BLE write. MERGE exists because the daemon may send the
-// quote of the day as its own write (rather than shortening it to share one with
-// the usage numbers) — that write must update the display without being fed to
-// the usage-rate tracker as if it were a fresh usage sample.
+// Outcome of parsing one BLE write. MERGE is a supplementary write with no usage
+// fields: the quote of the day sent on its own (it wouldn't fit alongside the
+// numbers), or the session-status list. It must update just those parts of the
+// display — never the usage freshness stamp, the clock anchor or the usage-rate
+// tracker, all of which describe the last *usage* payload.
 enum parse_result_t { PARSE_ERROR, PARSE_USAGE, PARSE_MERGE };
 
+// Which supplementary parts a write carried, so loop() refreshes only those.
+struct parse_parts_t {
+    bool qd;   // a new quote of the day
+    bool ss;   // a session-status list
+};
+
+// "ss":[{"h":"wsl","n":"api","s":1}, ...]. An empty array clears the list.
+// Returns false when the write has no "ss" array at all ("no news").
+static bool parse_sessions(JsonVariantConst ss, UsageData* out) {
+    if (!ss.is<JsonArrayConst>()) return false;
+    out->session_count = 0;
+    for (JsonObjectConst e : ss.as<JsonArrayConst>()) {
+        if (out->session_count >= MAX_SESSIONS) break;
+        int state = e["s"] | -1;
+        if (state < SESSION_WORKING || state > SESSION_STALE) continue;
+        SessionData* dst = &out->sessions[out->session_count];
+        strlcpy(dst->host, e["h"] | "", sizeof(dst->host));
+        strlcpy(dst->name, e["n"] | "", sizeof(dst->name));
+        dst->state = (uint8_t)state;
+        if (dst->name[0]) out->session_count++;
+    }
+    return true;
+}
+
 // Parse a JSON line into UsageData.
-static parse_result_t parse_json(const char* json, UsageData* out) {
+static parse_result_t parse_json(const char* json, UsageData* out, parse_parts_t* parts) {
+    *parts = {};
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
     if (err) {
@@ -111,16 +137,21 @@ static parse_result_t parse_json(const char* json, UsageData* out) {
         return PARSE_ERROR;
     }
 
-    // Supplementary write: a payload carrying "qd" but no usage fields is the
-    // quote of the day sent on its own, because it wouldn't fit one BLE write
-    // alongside the numbers (the daemon splits rather than shortening the
-    // quote). Merge just that and leave every other field — and the usage
-    // freshness they imply — exactly as the last full payload left it.
+    // Sessions can ride on any write (the daemon sends them on their own) and
+    // are independent of usage: they're accepted even before the first usage
+    // payload, and a usage payload without "ss" leaves them alone.
+    parts->ss = parse_sessions(doc["ss"], out);
+
+    // Supplementary write: no usage fields. Merge whatever it carries and leave
+    // every usage field exactly as the last full payload left it.
     JsonVariantConst qd = doc["qd"];
     if (doc["s"].isNull() && doc["ok"].isNull()) {
-        if (!qd.is<JsonObjectConst>()) return PARSE_ERROR;
-        strlcpy(out->qod_text, qd["t"] | "", sizeof(out->qod_text));
-        strlcpy(out->qod_author, qd["a"] | "", sizeof(out->qod_author));
+        if (qd.is<JsonObjectConst>()) {
+            strlcpy(out->qod_text, qd["t"] | "", sizeof(out->qod_text));
+            strlcpy(out->qod_author, qd["a"] | "", sizeof(out->qod_author));
+            parts->qd = true;
+        }
+        if (!parts->qd && !parts->ss) return PARSE_ERROR;
         return PARSE_MERGE;
     }
 
@@ -424,7 +455,8 @@ void loop() {
     // leave the second sitting queued for an extra ~loop-time with stale data
     // still on screen, and on a slow enough loop the queue could back up.
     while (ble_has_data()) {
-        parse_result_t res = parse_json(ble_get_data(), &usage);
+        parse_parts_t parts;
+        parse_result_t res = parse_json(ble_get_data(), &usage, &parts);
         if (res == PARSE_ERROR) {
             ble_send_nack();
         } else {
@@ -439,8 +471,13 @@ void loop() {
                     Serial.println("session reset detected — chime");
                     sound_hal_play_reset();
                 }
+                ui_update(&usage);
+            } else if (parts.qd) {
+                // Not ui_update(): that would mark stale usage as fresh and
+                // re-anchor the clock to the last usage payload's epoch.
+                ui_update_quote_of_day(usage.qod_text, usage.qod_author);
             }
-            ui_update(&usage);
+            if (parts.ss) ui_update_sessions(usage.sessions, usage.session_count);
             ble_send_ack();
         }
     }

@@ -100,8 +100,9 @@ static volatile uint16_t param_fix_spent  = CONN_HANDLE_NONE;  // one per connec
 // consume it, silently dropping every usage update on boards whose loop()
 // iteration is slow enough to miss the gap between the two writes (confirmed
 // happening 100% of the time on waveshare_s3_touch_lcd_4's heavier RGB-panel
-// flush path). Depth 3 covers that known worst case (2) with headroom.
-#define RX_QUEUE_DEPTH 3
+// flush path). The worst case is now 3 (usage + quote + session status, see
+// daemon/session_status.py); depth 4 keeps one slot of headroom.
+#define RX_QUEUE_DEPTH 4
 static char rx_queue[RX_QUEUE_DEPTH][BLE_BUF_SIZE];
 static volatile uint8_t rx_head = 0;   // next slot onWrite() fills
 static volatile uint8_t rx_tail = 0;   // next slot ble_get_data() drains
@@ -358,9 +359,8 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
         std::string val = chr->getValue();
         size_t len = std::min(val.length(), (size_t)(BLE_BUF_SIZE - 1));
         if (rx_count >= RX_QUEUE_DEPTH) {
-            // Never observed in practice (worst case is 2 writes/cycle), but
-            // drop the oldest rather than the newest write if it ever happens —
-            // a missed quote update is harmless, a missed usage update isn't.
+            // Shouldn't happen (worst case is 3 writes per daemon tick). If it
+            // does, drop the oldest: the newest is the freshest state.
             Serial.println("BLE: RX queue full, dropping oldest pending message");
             rx_tail = (rx_tail + 1) % RX_QUEUE_DEPTH;
             rx_count--;

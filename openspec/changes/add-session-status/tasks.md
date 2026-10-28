@@ -33,11 +33,11 @@
 
 ## 5. Firmware: data path
 
-- [ ] 5.1 P4 `ble.cpp`: replace the single `rx_buf`/`data_ready` with the shared copy-out queue, `RX_QUEUE_DEPTH 4`.
-- [ ] 5.2 `data.h`: `SessionData { char host[9]; char name[21]; uint8_t state; }`, `MAX_SESSIONS 6`, count, last-`ss` millis.
-- [ ] 5.3 `parse_json()`: generic merge branch (no `s`/`ok` → merge `qd` and/or `ss`; `PARSE_ERROR` only if neither); new `PARSE_SESSIONS` result. `ss:[]` clears.
-- [ ] 5.4 `main.cpp`: `PARSE_SESSIONS` → `ui_update_sessions()`, never `ui_update()`. Also stop `qd`-only `PARSE_MERGE` from refreshing `last_data_ms` (existing latent bug).
-- [ ] 5.5 Sessions accepted before the first usage payload (not gated by `data->valid`); list hidden after 3 min without an `ss` write.
+- [x] 5.1 P4 `ble.cpp`: replaced the single `rx_buf`/`data_ready` with the shared copy-out queue at `RX_QUEUE_DEPTH 4`. Shared `ble.cpp` raised from 3 to 4 too, since every board now gets usage + quote + session writes back to back.
+- [x] 5.2 `data.h`: `SessionData { char host[9]; char name[21]; uint8_t state; }`, `MAX_SESSIONS 6`, count, last-`ss` millis.
+- [x] 5.3 `parse_json()`: generic merge branch (no `s`/`ok` → merge `qd` and/or `ss`; `PARSE_ERROR` only if neither). Instead of a separate `PARSE_SESSIONS` result, a `parse_parts_t` out-param says which parts a write carried, since one write may carry both. `ss:[]` clears.
+- [x] 5.4 `main.cpp`: merge writes call `ui_update_quote_of_day()` / `ui_update_sessions()`, never `ui_update()`. This fixes two existing bugs: a `qd`-only write marked stale usage as fresh, and re-anchored the clock to the last usage payload's epoch, so the clock jumped back.
+- [x] 5.5 Sessions accepted before the first usage payload (not gated by `data->valid`); `ui_update_sessions()` records `sess_last_ms` for the 3-minute hide, which the list widget applies in 6.2.
 
 ## 6. Firmware: UI (P4 first)
 
