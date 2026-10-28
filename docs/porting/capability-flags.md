@@ -24,6 +24,16 @@ Keep the two in sync. The pattern in `caps.cpp` does this for you:
 | `BOARD_HAS_BATTERY`            | 0       | Whether PMU battery measurement is meaningful on this board. UI hides the battery indicator when false. |
 | `BOARD_HAS_IO_EXPANDER`        | 0       | Whether an IO expander gates display / touch reset lines. Doesn't directly gate any code path — but signals to the porter that `board_init()` must release the expander before `display_hal_init()`. |
 
+## Runtime-only flags
+
+These live only in `BoardCaps` (no `BOARD_HAS_*` macro). Leave them out of a board's `caps.cpp` to get `false`; append new ones at the end of the struct, since every `caps.cpp` uses designated initializers.
+
+| Field                | What it gates |
+|----------------------|---------------|
+| `is_round`           | Round-safe usage layout (semicircle gauges, no logo/title). |
+| `has_media_controls` | The bottom media/volume touch bar and its BLE consumer-control report (P4 only; see `openspec/changes/add-media-volume-controls`). |
+| `has_session_list`   | The Claude Code session list and its attention cue, drawn in the center band (P4 only; see `openspec/changes/add-session-status`). Needs a band of at least 240px between the usage panels and whatever is anchored to the bottom. |
+
 ## Build-flag macros
 
 `BOARD_HAS_PSRAM` is set as a `-D` build flag in `platformio.ini` (not in `board.h`) on chips with external PSRAM wired up. Shared code (`main.cpp`, `creature.cpp`) and per-board display drivers use it to choose between `MALLOC_CAP_SPIRAM` (large buffers) and `MALLOC_CAP_INTERNAL` (small buffers, partial-render LVGL, screenshot capture disabled). New ESP32-C6 / ESP32-C3 ports must leave this undefined.

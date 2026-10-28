@@ -73,6 +73,9 @@ struct Layout {
     // the day and any market quotes the daemon sends. Zero height = this board
     // has no room for one.
     int16_t ticker_y, ticker_h;
+    // Claude Code session list (BoardCaps.has_session_list). Takes over the
+    // same band as the center rotator, but all of it, while any session exists.
+    int16_t sess_y, sess_h;            // 0 height = not built
     const lv_font_t* ticker_value_font;   // the big line (time / price)
     const lv_font_t* ticker_label_font;   // caption above it (weekday / symbol)
     const lv_font_t* ticker_sub_font;     // line below it (date / percent change)
@@ -357,6 +360,10 @@ static void compute_layout(const BoardCaps& c) {
     const int16_t bottom_limit = (L.control_bar_h > 0) ? L.control_bar_y
                                                        : (int16_t)(L.scr_h - 70);
     const int16_t avail = bottom_limit - panels_end;
+    if (board_caps().has_session_list && avail >= 240) {
+        L.sess_y = panels_end + 20;
+        L.sess_h = avail - 40;
+    }
     if (avail >= 240) {
         // Capped rather than stretched to fill: three lines of text in a
         // 400px-tall box reads as floating in a void, not as a filled panel.
@@ -450,6 +457,8 @@ static int         sess_count = 0;
 static uint32_t    sess_last_ms = 0;      // lv_tick when the last "ss" write landed
 static bool        sess_received = false; // any "ss" write since boot
 static bool        sess_dirty = false;    // re-render pending
+static bool        sess_showing = false;  // list on screen (replaces the rotator, brings back the title clock)
+static bool        sess_cue_on = false;   // amber attention pulse armed
 // The quote card is a paragraph, not a number — 6s isn't enough to read one.
 #define TICKER_QOD_MS  12000
 #define TICKER_FADE_MS 300
@@ -467,6 +476,7 @@ static lv_image_dsc_t control_icon_dscs[5];  // vol down, mute, vol up, play/pau
 // connected but no usage update landed within DATA_FRESH_MS, the pairing hint
 // when BLE is down. Re-evaluated every loop in ui_tick_anim().
 static lv_obj_t* idle_group;            // the "Zzz" idle screen
+static lv_obj_t* idle_creature = nullptr; // hidden while the session list covers it
 static uint32_t  last_data_ms = 0;      // lv_tick when the last valid usage update landed
 static bool      data_received = false; // any valid update since boot
 static int       view_state = -1;       // -1 unknown / 0 pair / 1 idle / 2 usage
@@ -1092,6 +1102,11 @@ static void ticker_tick(uint32_t now) {
     if (!ticker_panel) return;
     static int shown_count = -1;
 
+    if (sess_showing) {   // the session list owns this band while it has rows
+        lv_obj_add_flag(ticker_panel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
     const int n = ticker_card_count();
     if (n <= 0) {
         lv_obj_add_flag(ticker_panel, LV_OBJ_FLAG_HIDDEN);
@@ -1398,6 +1413,204 @@ static lv_obj_t* make_combined_usage_panel(lv_obj_t* parent, int y, int h) {
 
 // Pairing hint — shown when disconnected so the screen isn't empty and the
 // user knows how to (re)pair. Wording matches the 3-second release gesture.
+// ---- Claude Code session list ----
+//
+// Rows from the daemon's "ss" writes (see daemon/session_status.py): which
+// sessions are working, which need you (a permission prompt or a question),
+// which are waiting for your next prompt. Lives in usage_container, not
+// usage_group, so it stays up when usage data goes stale — a session waiting on
+// you matters more then, not less. Hidden in the pairing view.
+#define SESS_LIVE_MS  180000   // daemon heartbeat is 60 s; 3 missed ⇒ it's gone
+#define SESS_PULSE_MS 600      // attention-border blink period (each half)
+static lv_obj_t* sess_panel = nullptr;
+static lv_obj_t* sess_dot[MAX_SESSIONS];
+static lv_obj_t* sess_host[MAX_SESSIONS];
+static lv_obj_t* sess_name[MAX_SESSIONS];
+static lv_obj_t* sess_word[MAX_SESSIONS];
+static lv_obj_t* sess_cue = nullptr;      // amber screen border, on the top layer
+static char      sess_needs_prev[MAX_SESSIONS][32];
+static int       sess_needs_prev_n = 0;
+
+static lv_color_t sess_color(uint8_t s) {
+    switch (s) {
+        case SESSION_NEEDS_YOU: return COL_AMBER;
+        case SESSION_YOUR_TURN: return COL_GREEN;
+        case SESSION_WORKING:   return COL_TEAL;
+        default:                return COL_DIM;
+    }
+}
+
+static const char* sess_word_text(uint8_t s) {
+    switch (s) {
+        case SESSION_NEEDS_YOU: return "needs you";
+        case SESSION_YOUR_TURN: return "your turn";
+        case SESSION_WORKING:   return "working";
+        default:                return "stale";
+    }
+}
+
+static void sess_click_cb(lv_event_t* e) {
+    (void)e;
+    sess_cue_on = false;   // acknowledged until another session newly needs you
+}
+
+static void build_session_panel(lv_obj_t* parent) {
+    sess_panel = make_panel(parent, L.margin, L.sess_y, L.content_w, L.sess_h);
+    // Own padding: the large breakpoint leaves panel_pad_* at 0 (its panels place
+    // their children by hand), which would put the dots against the rounded edge.
+    const int16_t pad_x = 24, pad_y = 16;
+    lv_obj_set_style_pad_hor(sess_panel, pad_x, 0);
+    lv_obj_set_style_pad_ver(sess_panel, pad_y, 0);
+    lv_obj_add_flag(sess_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(sess_panel, sess_click_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* hdr = lv_label_create(sess_panel);
+    lv_label_set_text(hdr, "Claude Code");
+    lv_obj_set_style_text_font(hdr, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(hdr, COL_DIM, 0);
+    lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // On the P4: 632 x 362 inside the panel, 53px rows.
+    const int16_t inner_w = L.content_w - 2 * pad_x;
+    const int16_t inner_h = L.sess_h - 2 * pad_y;
+    const int16_t hdr_h   = 44;
+    const int16_t row_h   = (inner_h - hdr_h) / MAX_SESSIONS;
+    const int16_t host_x  = 30, host_w = 110, word_w = 150;
+    const int16_t name_x  = host_x + host_w;
+    const int16_t lh20 = lv_font_get_line_height(&font_styrene_20);
+    const int16_t lh28 = lv_font_get_line_height(&font_styrene_28);
+
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        const int16_t mid = hdr_h + i * row_h + row_h / 2;
+
+        sess_dot[i] = lv_obj_create(sess_panel);
+        lv_obj_set_size(sess_dot[i], 14, 14);
+        lv_obj_set_pos(sess_dot[i], 0, mid - 7);
+        lv_obj_set_style_radius(sess_dot[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(sess_dot[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(sess_dot[i], 0, 0);
+        lv_obj_clear_flag(sess_dot[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(sess_dot[i], LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        sess_host[i] = lv_label_create(sess_panel);
+        lv_obj_set_style_text_font(sess_host[i], &font_styrene_20, 0);
+        lv_obj_set_style_text_color(sess_host[i], COL_DIM, 0);
+        lv_label_set_long_mode(sess_host[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(sess_host[i], host_w - 10);
+        lv_obj_set_pos(sess_host[i], host_x, mid - lh20 / 2);
+
+        sess_name[i] = lv_label_create(sess_panel);
+        lv_obj_set_style_text_font(sess_name[i], &font_styrene_28, 0);
+        lv_obj_set_style_text_color(sess_name[i], COL_TEXT, 0);
+        lv_label_set_long_mode(sess_name[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(sess_name[i], inner_w - name_x - word_w);
+        lv_obj_set_pos(sess_name[i], name_x, mid - lh28 / 2);
+
+        sess_word[i] = lv_label_create(sess_panel);
+        lv_obj_set_style_text_font(sess_word[i], &font_styrene_20, 0);
+        lv_obj_set_style_text_align(sess_word[i], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_width(sess_word[i], word_w);
+        lv_obj_set_pos(sess_word[i], inner_w - word_w, mid - lh20 / 2);
+    }
+    lv_obj_add_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);   // sessions_tick decides
+
+    // Attention cue: a thick amber border around the whole screen, on the top
+    // layer so nothing covers it, and not clickable so it never eats a tap.
+    sess_cue = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(sess_cue, L.scr_w, L.scr_h);
+    lv_obj_set_pos(sess_cue, 0, 0);
+    lv_obj_set_style_bg_opa(sess_cue, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(sess_cue, COL_AMBER, 0);
+    lv_obj_set_style_border_width(sess_cue, 12, 0);
+    lv_obj_set_style_radius(sess_cue, 0, 0);
+    lv_obj_set_style_pad_all(sess_cue, 0, 0);
+    lv_obj_clear_flag(sess_cue, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(sess_cue, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(sess_cue, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void sess_render(void) {
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        lv_obj_t* parts[] = { sess_dot[i], sess_host[i], sess_name[i], sess_word[i] };
+        if (i >= sess_count) {
+            for (lv_obj_t* p : parts) lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        const SessionData& r = sess_rows[i];
+        const lv_color_t c = sess_color(r.state);
+        lv_obj_set_style_bg_color(sess_dot[i], c, 0);
+        lv_label_set_text(sess_host[i], r.host);
+        lv_label_set_text(sess_name[i], r.name);
+        lv_obj_set_style_text_color(sess_name[i],
+            r.state == SESSION_STALE ? COL_DIM : COL_TEXT, 0);
+        lv_label_set_text(sess_word[i], sess_word_text(r.state));
+        lv_obj_set_style_text_color(sess_word[i], c, 0);
+        for (lv_obj_t* p : parts) lv_obj_clear_flag(p, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// Arm the cue when a session newly enters "needs you"; disarm when none is
+// left in it (resolved at the terminal, so there's nothing to acknowledge).
+static void sess_track_needs(void) {
+    char now_keys[MAX_SESSIONS][32];
+    int n = 0;
+    bool any_new = false;
+    for (int i = 0; i < sess_count; i++) {
+        if (sess_rows[i].state != SESSION_NEEDS_YOU) continue;
+        snprintf(now_keys[n], sizeof(now_keys[n]), "%s/%s", sess_rows[i].host, sess_rows[i].name);
+        bool seen = false;
+        for (int j = 0; j < sess_needs_prev_n; j++)
+            if (strcmp(now_keys[n], sess_needs_prev[j]) == 0) { seen = true; break; }
+        if (!seen) any_new = true;
+        n++;
+    }
+    memcpy(sess_needs_prev, now_keys, sizeof(now_keys));
+    sess_needs_prev_n = n;
+    if (any_new) sess_cue_on = true;
+    if (n == 0)  sess_cue_on = false;
+}
+
+// Called every loop from ui_tick_anim(), after update_view_state().
+static void sessions_tick(uint32_t now) {
+    if (!sess_panel) return;
+    if (sess_dirty) {
+        sess_dirty = false;
+        sess_render();
+        sess_track_needs();
+    }
+
+    const bool live = sess_received && (now - sess_last_ms) < SESS_LIVE_MS;
+    const bool show = live && sess_count > 0 && view_state != 0;
+    if (show != sess_showing) {
+        sess_showing = show;
+        if (show) lv_obj_clear_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);
+        else      lv_obj_add_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);
+        // The list sits where the idle screen centers its sleeping creature.
+        if (idle_creature) {
+            if (show) lv_obj_add_flag(idle_creature, LV_OBJ_FLAG_HIDDEN);
+            else      lv_obj_clear_flag(idle_creature, LV_OBJ_FLAG_HIDDEN);
+        }
+        // The list hides the rotator's clock card, so the title clock takes
+        // over while it's up (ui_tick_anim); revert to "Usage" when it goes.
+        clock_last_min = -1;
+        if (!show && ticker_panel) lv_label_set_text(lbl_title, "Usage");
+        ticker_dirty = true;
+    }
+
+    static int last_phase = -1;
+    if (sess_cue_on && show) {
+        const int phase = (int)((now / SESS_PULSE_MS) & 1);
+        if (phase != last_phase) {
+            last_phase = phase;
+            lv_obj_set_style_border_opa(sess_cue, phase ? LV_OPA_COVER : LV_OPA_20, 0);
+            lv_obj_clear_flag(sess_cue, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else if (last_phase != -1) {
+        last_phase = -1;
+        lv_obj_add_flag(sess_cue, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void build_pair_group(lv_obj_t* parent) {
     pair_group = lv_obj_create(parent);
     lv_obj_set_size(pair_group, L.scr_w, L.scr_h - L.content_y);
@@ -1454,6 +1667,7 @@ static void build_idle_group(lv_obj_t* parent) {
     // status line carries the words, so no extra text is needed here.
     lv_obj_t* creature = creature_create(idle_group, "expression sleep", L.idle_px);
     if (creature) lv_obj_align(creature, LV_ALIGN_CENTER, 0, L.idle_offset_y);
+    idle_creature = creature;
 
     lv_obj_add_flag(idle_group, LV_OBJ_FLAG_HIDDEN);  // update_view_state decides
 }
@@ -1619,6 +1833,10 @@ static void init_usage_screen(lv_obj_t* scr) {
     // they sit ON TOP of the bar and silently swallow every tap aimed at it. Lift the
     // bar back to the front so its buttons are actually hittable on the idle screen.
     if (control_bar) lv_obj_move_foreground(control_bar);
+
+    // Same z-order reasoning as the control bar: created after pair/idle so it
+    // isn't buried under them (it must be tappable on the idle screen too).
+    if (L.sess_h > 0) build_session_panel(usage_container);
 
     // Status line — always visible on the usage view. Driven by ui_tick_anim().
     lbl_anim = lv_label_create(usage_container);
@@ -1829,15 +2047,17 @@ void ui_tick_anim(void) {
 
     uint32_t now = lv_tick_get();
 
+    sessions_tick(now);   // before ticker_tick: it decides who owns the center band
     ticker_tick(now);
     pomodoro_tick(now);
 
     // Title clock: once the daemon has sent wall-clock time, replace "Usage" with
     // the live time, advanced locally so it ticks every minute between payloads.
     // Skipped on boards with a center rotator — that panel already shows the time,
-    // in a much bigger font, and the same clock twice on one screen reads as a bug.
+    // in a much bigger font, and the same clock twice on one screen reads as a bug —
+    // except while the session list has taken over the rotator's band.
     struct tm tmv;
-    if (clock_base_epoch > 0 && !ticker_panel && clock_now(&tmv)) {
+    if (clock_base_epoch > 0 && (!ticker_panel || sess_showing) && clock_now(&tmv)) {
         if (tmv.tm_min != clock_last_min) {   // only rewrite the title when the minute changes
             clock_last_min = tmv.tm_min;
             char tbuf[12];

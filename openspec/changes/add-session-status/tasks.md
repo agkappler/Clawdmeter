@@ -41,10 +41,10 @@
 
 ## 6. Firmware: UI (P4 first)
 
-- [ ] 6.1 `BoardCaps.has_session_list` appended last in `board_caps.h`; true in P4 `caps.cpp`; update `template/caps.cpp` and `docs/porting/capability-flags.md`.
-- [ ] 6.2 Session list in `usage_container`, raised above pair/idle groups; replaces the rotator band while non-empty; rows `dot host/project state` (ASCII only).
-- [ ] 6.3 Title clock shown while the list replaces the rotator; list hidden in the pairing view; idle creature hidden while the list is non-empty.
-- [ ] 6.4 Attention cue: amber border pulse on a new "needs you"; stops on tap or when no session is in "needs you".
+- [x] 6.1 `BoardCaps.has_session_list` appended last in `board_caps.h`; true in P4 `caps.cpp`; update `template/caps.cpp` and `docs/porting/capability-flags.md`.
+- [x] 6.2 Session list in `usage_container`, created after pair/idle so it's tappable on the idle screen; takes the whole center band (436–830 on the P4, 6 × 53px rows) and hides the rotator while non-empty and live (an `ss` write within 3 min). Rows are dot, host (dim), name, state word, as separate labels rather than one `host/project` string, since LVGL recolor syntax would misread the `#` in names like `api#2`.
+- [x] 6.3 Title clock shown while the list replaces the rotator; list hidden in the pairing view; idle creature hidden while the list is non-empty.
+- [x] 6.4 Attention cue: a 12px amber border on `lv_layer_top()` (not clickable), blinking at 600 ms, armed when a session newly enters "needs you"; stops on a tap on the list or when none is left in "needs you".
 - [ ] 6.5 Verify on P4 hardware with `tools/post_fixture_hooks.py` driving it (photo/eyeball — no screenshot on this board).
 - [ ] 6.6 Build every env to confirm boards without the flag are unchanged.
 

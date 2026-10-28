@@ -11,6 +11,7 @@ static const BoardCaps caps = {
     .has_imu = false,
     .is_round = false,
     .has_media_controls = true,
+    .has_session_list = true,
 };
 
 const BoardCaps& board_caps(void) { return caps; }
