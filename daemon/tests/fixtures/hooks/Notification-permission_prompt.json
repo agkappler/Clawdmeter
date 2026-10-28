@@ -1,0 +1,11 @@
+{
+  "session_id": "8aa3783b-eb66-4d5f-a4b5-655c84d77d46",
+  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/8aa3783b-eb66-4d5f-a4b5-655c84d77d46.jsonl",
+  "cwd": "/home/user/projects/api",
+  "permission_mode": "default",
+  "hook_event_name": "Notification",
+  "message": "Claude needs your permission to use Bash",
+  "notification_type": "permission_prompt",
+  "_source": "docs-derived, not yet captured live",
+  "title": "Permission needed"
+}

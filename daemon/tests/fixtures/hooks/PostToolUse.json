@@ -1,0 +1,18 @@
+{
+  "session_id": "8aa3783b-eb66-4d5f-a4b5-655c84d77d46",
+  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/8aa3783b-eb66-4d5f-a4b5-655c84d77d46.jsonl",
+  "cwd": "/home/user/projects/api",
+  "prompt_id": "408dd4d3-1c32-4380-93d2-ca9e55819946",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo hi",
+    "description": "Run echo hi"
+  },
+  "tool_response": {
+    "stdout": "<scrubbed>"
+  },
+  "tool_use_id": "toolu_01RWt46efDFthGCqrwYcuv3q",
+  "duration_ms": 94
+}
