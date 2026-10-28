@@ -4,7 +4,7 @@
 - [x] 1.1 Captured real payloads via throwaway `http` hooks + a local listener (`claude -p`, macOS, CLI 2.1.220): `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd` arrive with the documented fields, a URL query string survives, and `SessionStart` never fires for an `http` hook. Saved scrubbed as `daemon/tests/fixtures/hooks/*.json`.
 - [x] 1.1b Interactive capture (macOS, CLI 2.1.220, 25 events): `PermissionRequest` fires ~50 ms after `PreToolUse` and ~6 s before `Notification`/`permission_prompt`, and doesn't fire on auto-mode approvals; `AskUserQuestion` raises `PermissionRequest` + `permission_prompt` (not `elicitation_dialog`); `idle_prompt` arrives ~60 s after `Stop`; `PostToolUseFailure` carries `is_interrupt`; `session_title` appears on `UserPromptSubmit` after `/rename`. Fixtures replaced with real, scrubbed captures, plus `sequence-interactive.json` (full timed sequence, for 2.6's replay tool).
 - [ ] 1.1c Capture an Esc interrupt during a running tool and confirm `PostToolUseFailure` arrives with `is_interrupt: true` (design §2). Also capture a *denied* permission to confirm the next event clears "needs you".
-- [ ] 1.2 Confirm the desktop app's Code tab sessions fire the same `~/.claude/settings.json` hooks as the terminal CLI.
+- [ ] 1.2 Confirm the desktop app's Code tab sessions fire the same `~/.claude/settings.json` hooks as the terminal CLI. The settings docs say the desktop app reads the same settings files as the CLI (and reloads hooks without a restart); still worth one live check.
 - [ ] 1.3 Confirm a dead daemon (connection refused) and a hung one (accepts, never replies) produce no visible noise and at most a `timeout`-long stall, on macOS and native Windows.
 
 ## 2. Daemon: `daemon/session_status.py`
@@ -26,10 +26,10 @@
 
 ## 4. Hooks installer: `tools/install_session_hooks.py`
 
-- [ ] 4.1 Merge the `http` hooks (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `Stop`, `StopFailure`, `SessionEnd`) into `settings.json` without disturbing existing hooks; idempotent; `--host`, `--port`, `--token`, `--config-dir` (repeatable; defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`), `--uninstall`.
-- [ ] 4.2 Read the token from the local daemon's `sessions-token` file; `--token` passes it explicitly on remotes.
-- [ ] 4.3 Warn if `allowedHttpHookUrls` is defined and doesn't match. Inside WSL, detect NAT mode and print how to enable mirrored networking.
-- [ ] 4.4 `--remote` prints the `RemoteForward` line to add.
+- [x] 4.1 Merge the `http` hooks (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `Stop`, `StopFailure`, `SessionEnd`) into `settings.json` without disturbing existing hooks; idempotent; `--host`, `--port`, `--token`, `--config-dir` (repeatable; defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`), `--uninstall`.
+- [x] 4.2 Read the token from the local daemon's `sessions-token` file; `--token` passes it explicitly on remotes.
+- [x] 4.3 Warn if `allowedHttpHookUrls` is defined and doesn't match. Inside WSL, detect NAT mode and print how to enable mirrored networking.
+- [x] 4.4 `--remote` prints the `RemoteForward` line to add. Also: `--dry-run`, a `.clawdmeter-backup` copy before writing, refusal to touch an invalid `settings.json`, and stdlib-only / Python 3.8+ so it can be copied to a remote. Verified end to end: installer-written hooks in a scratch project + a real `claude -p` session produced the expected `ss` writes on a test receiver.
 
 ## 5. Firmware: data path
 
