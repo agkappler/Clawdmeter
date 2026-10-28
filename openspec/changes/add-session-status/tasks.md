@@ -2,13 +2,14 @@
 
 - [x] 1.0 Read the hooks reference (code.claude.com/docs/en/hooks, 2026-10-28). Folded into design.md: built-in `http` hook type replaces `curl`; SessionStart can't use it; `PermissionRequest`, `PostToolUseFailure`, `StopFailure` exist; the full `notification_type` list; `Stop` skips user interrupts; SessionEnd reasons. `session_title` is *not* a documented input.
 - [x] 1.1 Captured real payloads via throwaway `http` hooks + a local listener (`claude -p`, macOS, CLI 2.1.220): `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd` arrive with the documented fields, a URL query string survives, and `SessionStart` never fires for an `http` hook. Saved scrubbed as `daemon/tests/fixtures/hooks/*.json`.
-- [ ] 1.1b In an **interactive** session (`claude -p` can't produce these), capture `PermissionRequest`, `Notification` (`permission_prompt`, `idle_prompt`, `elicitation_dialog`) and `PostToolUseFailure`. Record which of `PermissionRequest` / `permission_prompt` fires first, and whether `PermissionRequest` fires in auto/acceptEdits modes when no dialog appears (a false alarm). Check a titled session for a `session_title` field. Replace the docs-derived `Notification-*.json` fixtures.
+- [x] 1.1b Interactive capture (macOS, CLI 2.1.220, 25 events): `PermissionRequest` fires ~50 ms after `PreToolUse` and ~6 s before `Notification`/`permission_prompt`, and doesn't fire on auto-mode approvals; `AskUserQuestion` raises `PermissionRequest` + `permission_prompt` (not `elicitation_dialog`); `idle_prompt` arrives ~60 s after `Stop`; `PostToolUseFailure` carries `is_interrupt`; `session_title` appears on `UserPromptSubmit` after `/rename`. Fixtures replaced with real, scrubbed captures, plus `sequence-interactive.json` (full timed sequence, for 2.6's replay tool).
+- [ ] 1.1c Capture an Esc interrupt during a running tool and confirm `PostToolUseFailure` arrives with `is_interrupt: true` (design §2). Also capture a *denied* permission to confirm the next event clears "needs you".
 - [ ] 1.2 Confirm the desktop app's Code tab sessions fire the same `~/.claude/settings.json` hooks as the terminal CLI.
 - [ ] 1.3 Confirm a dead daemon (connection refused) and a hung one (accepts, never replies) produce no visible noise and at most a `timeout`-long stall, on macOS and native Windows.
 
 ## 2. Daemon: `daemon/session_status.py`
 
-- [ ] 2.1 Session table: event → state mapping, `(host, session_id)` keys, `basename(cwd)` labels with `#N` de-dup, state-then-first-seen sort, expiry (30 min working → stale, 12 h → drop) on `time.monotonic()`.
+- [ ] 2.1 Session table: event → state mapping, `(host, session_id)` keys, `session_title` (remembered per session) or `basename(cwd)` labels with `#N` de-dup, state-then-first-seen sort, expiry (30 min working → stale, 12 h → drop) on `time.monotonic()`.
 - [ ] 2.2 Persist to `sessions.json` beside the daemon config on each change (wall-clock stamps); reload with expiry applied at startup.
 - [ ] 2.3 Asyncio HTTP receiver on `127.0.0.1:<port>`: `POST /hook/<host>` only, 64 KB cap; reject missing `application/json`, any `Origin`, bad `X-Clawdmeter-Token`; `204` empty body; field whitelist on receipt; `_asciify` labels.
 - [ ] 2.4 `build_ss_payload(limit)`: ≤ 6 entries, whole-entry truncation to `write_limit()`; `changed()` compares the serialized `(h,n,s)` list with the last one sent.

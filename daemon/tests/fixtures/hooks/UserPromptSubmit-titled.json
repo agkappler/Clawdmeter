@@ -1,0 +1,10 @@
+{
+  "session_id": "69b163d0-4c08-4d39-808e-7bf0cd467913",
+  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/69b163d0-4c08-4d39-808e-7bf0cd467913.jsonl",
+  "cwd": "/home/user/projects/api",
+  "prompt_id": "3efe5ada-9226-4373-ad99-79d414a808af",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "<scrubbed>",
+  "session_title": "capture-test"
+}

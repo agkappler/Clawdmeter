@@ -35,14 +35,15 @@ Claude Code itself POSTs the event JSON (`Content-Type: application/json`). No p
 
 **Managed allowlists:** if any settings level defines `allowedHttpHookUrls`, the hook only runs when its URL matches. The installer detects that and warns; it never edits managed policy.
 
-**Privacy:** hook JSON includes prompt text, tool inputs and tool responses. It only travels to localhost or through the user's own SSH tunnel. The receiver keeps only `session_id`, `cwd` basename, event name and `notification_type`, and drops everything else on receipt without logging it.
+**Privacy:** hook JSON includes prompt text, tool inputs and tool responses. It only travels to localhost or through the user's own SSH tunnel. The receiver keeps only `session_id`, `session_title`, `cwd` basename, event name, `notification_type` and `is_interrupt`, and drops everything else on receipt without logging it.
 
 **Alternatives considered:** a `curl` command hook (needs `curl.exe` for PowerShell, `|| true`, and per-platform shell handling); a per-machine filtering script (installs and updates on three platforms). Both are strictly worse.
 
 ### 2. Event → state mapping
 | Event | State |
 |---|---|
-| `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure` | working |
+| `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure` (`is_interrupt` false) | working |
+| `PostToolUseFailure` with `is_interrupt` true | your turn (unverified, see below) |
 | `PermissionRequest` | **needs you** |
 | `Notification` type `permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog`, `agent_needs_input` | **needs you** |
 | `Notification` type `elicitation_complete`, `elicitation_response` | working |
@@ -51,12 +52,16 @@ Claude Code itself POSTs the event JSON (`Content-Type: application/json`). No p
 | `Notification` types `auth_success`, `agent_completed`, `quota_*`, `plugin_notification`, any unknown type | ignored |
 | no event for 30 min while working, 12 h otherwise | stale; dropped after 12 h |
 
-- **`PermissionRequest` and `Notification`/`permission_prompt` are both hooked.** The docs say `PermissionRequest` fires "when a tool call needs a permission decision", but don't say whether it fires before the dialog or in auto/acceptEdits modes, and they don't give the timing of `permission_prompt` either. Hooking both costs nothing. Task 1.1b measures which fires first and whether `PermissionRequest` gives false alarms in modes that never show a dialog; drop whichever turns out redundant or noisy.
+- **`PermissionRequest` is the primary "needs you" signal** (measured in task 1.1b, CLI 2.1.220):
+  - It fires within ~50 ms of `PreToolUse`, at the moment the dialog appears. `Notification`/`permission_prompt` follows a consistent **~6 s later**, as a "still waiting" nudge.
+  - It does **not** fire in auto mode when the classifier approves, so it gives no false alarm there.
+  - It also covers questions: `AskUserQuestion` raised `PermissionRequest` (with `tool_name: "AskUserQuestion"`) plus a `permission_prompt` notification, not `elicitation_dialog`. `elicitation_*` remains for MCP elicitation, which wasn't exercised.
+  - `permission_prompt` stays hooked as a cheap backstop. It's idempotent, since the session is already "needs you" by then.
 - **Clearing "needs you":** `PostToolUse` clears it after approval. If the approved tool fails, no `PostToolUse` is sent, so `PostToolUseFailure` covers that case. After a denial, the next `PreToolUse` or `Stop` clears it.
 - **Unknown notification types are ignored:** the list already has 13 values and grows, and most new ones are informational. Only a `Notification` with no `notification_type` at all (older Claude Code) maps to "needs you".
-- **Interrupts:** `Stop` doesn't fire when the user presses Esc, so an interrupted session shows "working" until its next event or the 30-minute stale timeout. No hook covers this; accepted, because the user is at that terminal at that moment. A single tool call longer than 30 minutes also reads "stale"; same acceptance.
+- **Interrupts:** `Stop` doesn't fire when the user presses Esc. `PostToolUseFailure` carries an `is_interrupt` field (seen `false` in the capture), so an Esc *during a tool call* probably arrives as `is_interrupt: true` and can map to "your turn"; that's untested. An Esc while the model is generating, with no tool running, has no hook, so the session shows "working" until its next event or the 30-minute stale timeout. Accepted, because the user is at that terminal at that moment. A single tool call longer than 30 minutes also reads "stale"; same acceptance.
 - **Subagents:** events inside a subagent carry `agent_id` but the parent's `session_id`, so they fold into the parent session.
-- **Label:** `basename(cwd)`. A `session_title` input field is not documented (only a `sessionTitle` SessionStart *output*). If task 1.1b finds one on a titled session, prefer it.
+- **Label:** `session_title` when present, else `basename(cwd)`. The field isn't in the docs, but task 1.1b captured it on `UserPromptSubmit` after `/rename`. It only arrives on prompt events, so the table remembers the last title seen per session.
 
 ### 3. Receiver: stdlib asyncio, localhost only, in `main()`
 - **About 100 lines on `asyncio.start_server`**, bound to `127.0.0.1`. No new dependency. Accepts only `POST /hook/<host>` with a body ≤ 64 KB, and replies `204` immediately.
@@ -75,7 +80,7 @@ With `networkingMode=mirrored` in `.wslconfig`, WSL's localhost is the Windows h
 `RemoteForward 47123 127.0.0.1:47123` under the remote's `Host` entry: the remote's hook posts to its own localhost and arrives at the Windows daemon. This needs `AllowTcpForwarding` on the remote (the default). With several SSH connections to one remote open, only the first binds the port and the rest warn harmlessly. It's documented rather than automated; the installer prints the line to add.
 
 ### 6. Wire format and transport
-**Session table:** keyed by `(host, session_id)`, labelled `basename(cwd)` with `#2`, `#3` for same-host duplicates. Sort order is by state (needs you → your turn → working → stale), then by **first-seen** time, so rows don't reshuffle on every tool call. At most `MAX_SESSIONS` (6) are sent:
+**Session table:** keyed by `(host, session_id)`, labelled `session_title` or `basename(cwd)` with `#2`, `#3` for same-host duplicates. Sort order is by state (needs you → your turn → working → stale), then by **first-seen** time, so rows don't reshuffle on every tool call. At most `MAX_SESSIONS` (6) are sent:
 ```json
 {"ss":[{"h":"wsl","n":"api","s":1},{"h":"win","n":"Clawdmeter","s":0}]}
 ```

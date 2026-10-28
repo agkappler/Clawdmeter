@@ -1,0 +1,16 @@
+{
+  "session_id": "69b163d0-4c08-4d39-808e-7bf0cd467913",
+  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/69b163d0-4c08-4d39-808e-7bf0cd467913.jsonl",
+  "cwd": "/home/user/projects/api",
+  "prompt_id": "45fa6997-9f01-4daa-aa8b-4b8b9cdc13dd",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "<scrubbed>"
+  },
+  "permission_suggestions": []
+}

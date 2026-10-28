@@ -35,11 +35,15 @@ The daemon SHALL run its receiver on `127.0.0.1` only, only when `sessions = on`
 - **THEN** no listener is opened (or a single warning is logged), and usage display behaves exactly as before
 
 ### Requirement: Daemon maintains a persistent session table
-The daemon SHALL map events to states per the design's mapping table, ignore unknown notification types, expire sessions by age, keep no hook fields beyond session id, host tag, project folder name, event name and notification type, and persist the table across daemon restarts and BLE reconnects.
+The daemon SHALL map events to states per the design's mapping table, ignore unknown notification types, expire sessions by age, keep no hook fields beyond session id, session title, host tag, project folder name, event name, notification type and the interrupt flag, and persist the table across daemon restarts and BLE reconnects.
 
 #### Scenario: Permission needed
-- **WHEN** a session emits `PermissionRequest`, or `Notification` with `notification_type` `permission_prompt`
-- **THEN** that session's state becomes "needs you" and the device is updated within ~1 second
+- **WHEN** a session emits `PermissionRequest` (a tool or question awaiting the user)
+- **THEN** that session's state becomes "needs you" and the device is updated within ~1 second, without waiting for the later `permission_prompt` notification
+
+#### Scenario: Auto-approved tool
+- **WHEN** a tool call is approved automatically (auto mode, allow rules) and no dialog is shown
+- **THEN** the session stays "working" and no attention cue fires
 
 #### Scenario: Permission approved
 - **WHEN** a session in "needs you" emits `PostToolUse`, `PostToolUseFailure` or `PreToolUse`

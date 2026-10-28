@@ -1,11 +1,9 @@
 {
-  "session_id": "8aa3783b-eb66-4d5f-a4b5-655c84d77d46",
-  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/8aa3783b-eb66-4d5f-a4b5-655c84d77d46.jsonl",
+  "session_id": "69b163d0-4c08-4d39-808e-7bf0cd467913",
+  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/69b163d0-4c08-4d39-808e-7bf0cd467913.jsonl",
   "cwd": "/home/user/projects/api",
-  "permission_mode": "default",
+  "prompt_id": "45fa6997-9f01-4daa-aa8b-4b8b9cdc13dd",
   "hook_event_name": "Notification",
-  "message": "Claude needs your permission to use Bash",
-  "notification_type": "permission_prompt",
-  "_source": "docs-derived, not yet captured live",
-  "title": "Permission needed"
+  "message": "Claude needs your permission",
+  "notification_type": "permission_prompt"
 }

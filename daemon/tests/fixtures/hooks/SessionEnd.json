@@ -1,8 +1,8 @@
 {
-  "session_id": "8aa3783b-eb66-4d5f-a4b5-655c84d77d46",
-  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/8aa3783b-eb66-4d5f-a4b5-655c84d77d46.jsonl",
+  "session_id": "69b163d0-4c08-4d39-808e-7bf0cd467913",
+  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/69b163d0-4c08-4d39-808e-7bf0cd467913.jsonl",
   "cwd": "/home/user/projects/api",
-  "prompt_id": "408dd4d3-1c32-4380-93d2-ca9e55819946",
+  "prompt_id": "0d096cde-82e8-4246-bce4-1e35dee69690",
   "hook_event_name": "SessionEnd",
-  "reason": "other"
+  "reason": "prompt_input_exit"
 }

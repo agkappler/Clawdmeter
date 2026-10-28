@@ -1,0 +1,15 @@
+{
+  "session_id": "69b163d0-4c08-4d39-808e-7bf0cd467913",
+  "transcript_path": "/home/user/.claude/projects/-home-user-projects-api/69b163d0-4c08-4d39-808e-7bf0cd467913.jsonl",
+  "cwd": "/home/user/projects/api",
+  "prompt_id": "a49d6e95-cd83-4667-84fa-cf7642bbffeb",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "command": "<scrubbed>"
+  }
+}
