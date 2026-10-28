@@ -24,12 +24,12 @@ The Python daemons already send optional, independently-versioned payload fields
 
 ### 1. Hooks are Claude Code's built-in `http` hook type
 ```json
-{ "type": "http", "url": "http://127.0.0.1:47123/hook/<host>", "timeout": 2,
+{ "type": "http", "url": "http://127.0.0.1:47123/hook/<host>", "timeout": 1,
   "headers": { "X-Clawdmeter-Token": "<token>" } }
 ```
 Claude Code itself POSTs the event JSON (`Content-Type: application/json`). No process is spawned, there is no shell involved, and the config is identical on Windows, WSL, Linux, macOS and SSH remotes except for the host tag in the path. The host tag goes in the **path**, not a query string: the capture in task 1.1 showed a query string survives, but the path form doesn't depend on that.
 
-**Failure posture** (hooks docs): non-2xx, connection refused and timeout are all non-blocking unless `onFailure: "block"` is set, which we never set. The default `http` timeout is 600 s, so `timeout: 2` bounds a hung (not dead) daemon. The receiver always answers **`204` with an empty body**, never JSON: a 2xx JSON body is read as a hook decision, which matters for `PermissionRequest` in particular.
+**Failure posture** (hooks docs): non-2xx, connection refused and timeout are all non-blocking unless `onFailure: "block"` is set, which we never set. The default `http` timeout is 600 s, so `timeout: 1` bounds a hung (not dead) daemon (measured, task 1.3: a dead daemon costs nothing; a hung one costs up to the timeout per hook). With the daemon down, Claude Code prints one `SessionEnd hook ... failed: connect ECONNREFUSED` line when a session exits; the other events fail silently. The receiver always answers **`204` with an empty body**, never JSON: a 2xx JSON body is read as a hook decision, which matters for `PermissionRequest` in particular.
 
 **SessionStart can't use `http` hooks** (only `command` and `mcp_tool`), which the capture confirmed. A session first appears on its first `UserPromptSubmit`. That's acceptable: a session nobody has typed into has nothing to show.
 

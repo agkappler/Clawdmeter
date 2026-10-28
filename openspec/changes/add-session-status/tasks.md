@@ -4,8 +4,8 @@
 - [x] 1.1 Captured real payloads via throwaway `http` hooks + a local listener (`claude -p`, macOS, CLI 2.1.220): `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd` arrive with the documented fields, a URL query string survives, and `SessionStart` never fires for an `http` hook. Saved scrubbed as `daemon/tests/fixtures/hooks/*.json`.
 - [x] 1.1b Interactive capture (macOS, CLI 2.1.220, 25 events): `PermissionRequest` fires ~50 ms after `PreToolUse` and ~6 s before `Notification`/`permission_prompt`, and doesn't fire on auto-mode approvals; `AskUserQuestion` raises `PermissionRequest` + `permission_prompt` (not `elicitation_dialog`); `idle_prompt` arrives ~60 s after `Stop`; `PostToolUseFailure` carries `is_interrupt`; `session_title` appears on `UserPromptSubmit` after `/rename`. Fixtures replaced with real, scrubbed captures, plus `sequence-interactive.json` (full timed sequence, for 2.6's replay tool).
 - [ ] 1.1c Capture an Esc interrupt during a running tool and confirm `PostToolUseFailure` arrives with `is_interrupt: true` (design §2). Also capture a *denied* permission to confirm the next event clears "needs you".
-- [ ] 1.2 Confirm the desktop app's Code tab sessions fire the same `~/.claude/settings.json` hooks as the terminal CLI. The settings docs say the desktop app reads the same settings files as the CLI (and reloads hooks without a restart); still worth one live check.
-- [ ] 1.3 Confirm a dead daemon (connection refused) and a hung one (accepts, never replies) produce no visible noise and at most a `timeout`-long stall, on macOS and native Windows.
+- [ ] 1.2 Confirm the desktop app's Code tab sessions fire the same `~/.claude/settings.json` hooks as the terminal CLI. The settings docs say the desktop app reads the same settings files as the CLI (and reloads hooks without a restart); still worth one live check. (A self-test from inside a desktop session was refused by the auto-mode safety check as self-modification; do it by hand: install the hooks, open a desktop Code session, send a prompt, and watch the device or the daemon's `Sending: {"ss":...}` log lines.)
+- [x] 1.3 Measured with `claude -p` on macOS: dead daemon (connection refused) adds no time, but Claude Code prints one `SessionEnd hook ... failed` line at exit (other events silent); hung daemon (accepts, never replies) costs up to the timeout per hook, so the timeout dropped from 2 s to 1 s (fractional values are accepted too). Native Windows not re-checked; the http hook path is the same code.
 
 ## 2. Daemon: `daemon/session_status.py`
 
@@ -46,13 +46,13 @@
 - [x] 6.3 Title clock shown while the list replaces the rotator; list hidden in the pairing view; idle creature hidden while the list is non-empty.
 - [x] 6.4 Attention cue: a 12px amber border on `lv_layer_top()` (not clickable), blinking at 600 ms, armed when a session newly enters "needs you"; stops on a tap on the list or when none is left in "needs you".
 - [ ] 6.5 Verify on P4 hardware with `tools/post_fixture_hooks.py` driving it (photo/eyeball — no screenshot on this board).
-- [ ] 6.6 Build every env to confirm boards without the flag are unchanged.
+- [x] 6.6 Build every env to confirm boards without the flag are unchanged. All 9 envs build.
 
 ## 7. End-to-end and docs
 
 - [ ] 7.1 End-to-end on Windows: sessions in native Windows, WSL (mirrored) and over SSH all appear with correct host tags; permission prompt → amber within ~1 s; approve → working; exit → removed; daemon restart keeps a blocked session visible.
-- [ ] 7.2 `docs/session-status.md`: per-environment setup (Windows, WSL mirrored, SSH `RemoteForward`, macOS), token handling, known limitations (Esc interrupt, SessionStart, >30 min tool calls, single BLE owner, detached remote sessions), privacy note.
-- [ ] 7.3 Update `CLAUDE.md`: wire field, merge-path/freshness fix, P4 RX queue, placement decisions.
+- [x] 7.2 `docs/session-status.md`: per-environment setup (Windows, WSL mirrored, SSH `RemoteForward`, macOS), token handling, known limitations (Esc interrupt, SessionStart, >30 min tool calls, single BLE owner, detached remote sessions), privacy note.
+- [x] 7.3 Update `CLAUDE.md`: wire field, merge-path/freshness fix, P4 RX queue, placement decisions.
 
 ## 8. Later phases (separate changes)
 

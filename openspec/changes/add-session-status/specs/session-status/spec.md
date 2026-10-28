@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Hooks forward session events to the daemon without disturbing Claude Code
-The system SHALL provide a Claude Code hooks configuration that uses the built-in `http` hook type to post each event to `http://127.0.0.1:<port>/hook/<host>`, with a shared-secret header, an explicit timeout of at most 2 seconds, and never `onFailure: "block"`.
+The system SHALL provide a Claude Code hooks configuration that uses the built-in `http` hook type to post each event to `http://127.0.0.1:<port>/hook/<host>`, with a shared-secret header, an explicit timeout of 1 second, and never `onFailure: "block"`.
 
 #### Scenario: Daemon not running
 - **WHEN** a hook fires while no daemon is listening (or the SSH tunnel is down)

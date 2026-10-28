@@ -53,7 +53,7 @@ def test_install_adds_one_http_hook_per_event_and_keeps_existing(cfg):
     found = ours(s)
     assert sorted(ev for ev, _ in found) == sorted(inst.EVENTS)
     hook = found[0][1]
-    assert hook == {"type": "http", "url": "http://127.0.0.1:47123/hook/devbox", "timeout": 2,
+    assert hook == {"type": "http", "url": "http://127.0.0.1:47123/hook/devbox", "timeout": 1,
                     "headers": {"X-Clawdmeter-Token": "tok"}}
     assert "SessionStart" not in s["hooks"]   # http hooks don't run there
 

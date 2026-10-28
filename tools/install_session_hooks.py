@@ -36,7 +36,7 @@ from pathlib import Path
 
 DEFAULT_PORT = 47123
 TOKEN_HEADER = "X-Clawdmeter-Token"
-TIMEOUT = 2   # seconds; Claude Code's default for http hooks is 600
+TIMEOUT = 1   # seconds; Claude Code's default for http hooks is 600. A hung (not dead) daemon costs this per hook.
 
 # Events that move a session between working / needs you / your turn / gone.
 # SessionStart is absent on purpose: it doesn't support `http` hooks.
