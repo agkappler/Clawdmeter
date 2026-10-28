@@ -29,6 +29,13 @@ from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
+# The tray imports this module as `daemon.claude_usage_daemon_windows`; run as a
+# script, `daemon/` itself is on sys.path instead.
+try:
+    from daemon import session_status
+except ImportError:
+    import session_status
+
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -888,7 +895,8 @@ async def _wait_first(*events: asyncio.Event, timeout: float) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) -> bool:
+async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None,
+                          sessions=None) -> bool:
     """Connect to device and poll until disconnected or stopped.
 
     Returns True if at least one successful write occurred.
@@ -949,6 +957,8 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
     log("Connected")
     session = Session(client)
     await session.setup_refresh_subscription()
+    if sessions is not None:
+        sessions.on_connect()   # a fresh link needs the whole session list again
 
     last_poll = 0.0  # D-03: poll immediately on first connect
     used_successfully = False
@@ -993,12 +1003,28 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                     # as an auth problem (SC#5). Leave tray state unchanged; the next
                     # tick retries and set_connected() recovers it.
 
+            # Session status: its own write, sent on change, on its own
+            # heartbeat (not tied to the usage poll, which skips when there's no
+            # token or the API is down), and right after connecting.
+            if sessions is not None:
+                sent = await sessions.pump(session._write, session.write_limit())
+                if sent is False:
+                    consecutive_failures += 1
+                    if consecutive_failures >= ZOMBIE_BREAK_LIMIT:
+                        log("Zombie link detected (session write failed); abandoning connection")
+                        break
+                elif sent:
+                    consecutive_failures = 0
+
             # Wake on a refresh request OR a stop, whichever comes first. Waking
             # promptly on stop_event is what lets the finally below run
             # client.disconnect() before the process exits, so the peer gets a
             # clean GATT disconnect (returns to its waiting screen) instead of
             # being left frozen on stale data after Quit (SC#3 graceful shutdown).
-            await _wait_first(session.refresh_requested, stop_event, timeout=TICK)
+            waits = [session.refresh_requested, stop_event]
+            if sessions is not None:
+                waits.append(sessions.changed)   # a session needs you: don't wait for TICK
+            await _wait_first(*waits, timeout=TICK)
     finally:
         # Clean GATT disconnect on the way out — this is what tells the peripheral
         # the link is gone. WinRT can surface a raw OSError (not BleakError) here,
@@ -1057,6 +1083,9 @@ async def main(tray_state=None) -> None:
 
     log("=== Claude Usage Tracker Daemon (BLE, Windows) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
+    # Lives for the whole run (not per connection) so a BLE reconnect loses no
+    # session state. None unless `sessions = on` in the config.
+    sessions = await session_status.start_from_config(CONFIG_FILE, log)
 
     # D-05: two distinct backoff regimes — slow-search (device absent) vs fast-reconnect (link dropped)
     search_backoff = 1     # caps at 60s — gentle, for a device that is genuinely absent/off
@@ -1075,7 +1104,7 @@ async def main(tray_state=None) -> None:
             search_backoff = _next_backoff(search_backoff, 60)
             continue
 
-        ok = await connect_and_run(device, stop_event, tray_state)
+        ok = await connect_and_run(device, stop_event, tray_state, sessions=sessions)
         if not ok:
             # Fast-reconnect regime: had/attempted a link that dropped — retry quickly
             if tray_state:

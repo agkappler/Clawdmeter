@@ -59,3 +59,17 @@ clock = off
 # one won't fit in a single Bluetooth write alongside the usage numbers it's
 # sent as its own write instead of being shortened.
 quote_of_day = off
+
+# Show your Claude Code sessions on the device: which are working, which are
+# waiting on you (a permission prompt or a question), and which have finished.
+# Each machine you run Claude Code on sends its sessions here through Claude
+# Code hooks — native Windows/macOS directly, WSL (mirrored networking) and SSH
+# remotes (via `RemoteForward 47123 127.0.0.1:47123`) too. See
+# docs/session-status.md for setting up the hooks.
+#   off = no session receiver (default)
+#   on  = listen on 127.0.0.1 for hook events and send the list to the device
+# Read once at daemon start: restart the daemon after changing these.
+# The hooks must send the shared secret the daemon writes to `sessions-token`
+# next to this file on first start.
+sessions = off
+# sessions_port = 47123

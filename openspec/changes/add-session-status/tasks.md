@@ -9,25 +9,25 @@
 
 ## 2. Daemon: `daemon/session_status.py`
 
-- [ ] 2.1 Session table: event → state mapping, `(host, session_id)` keys, `session_title` (remembered per session) or `basename(cwd)` labels with `#N` de-dup, state-then-first-seen sort, expiry (30 min working → stale, 12 h → drop) on `time.monotonic()`.
-- [ ] 2.2 Persist to `sessions.json` beside the daemon config on each change (wall-clock stamps); reload with expiry applied at startup.
-- [ ] 2.3 Asyncio HTTP receiver on `127.0.0.1:<port>`: `POST /hook/<host>` only, 64 KB cap; reject missing `application/json`, any `Origin`, bad `X-Clawdmeter-Token`; `204` empty body; field whitelist on receipt; `_asciify` labels.
-- [ ] 2.4 `build_ss_payload(limit)`: ≤ 6 entries, whole-entry truncation to `write_limit()`; `changed()` compares the serialized `(h,n,s)` list with the last one sent.
-- [ ] 2.5 Unit tests from the fixtures: mapping (incl. unknown notification types ignored), expiry, persistence round-trip, de-dup, sort stability under tool-call churn, payload size, request rejection rules, prompt/tool fields never retained.
-- [ ] 2.6 `tools/post_fixture_hooks.py`: replay fixture sequences into a running receiver (blocked / approved / several hosts / >6 sessions) — the only practical way to drive the P4 UI, which has no screenshot and no serial input.
+- [x] 2.1 Session table: event → state mapping, `(host, session_id)` keys, `session_title` (remembered per session) or `basename(cwd)` labels with `#N` de-dup, state-then-first-seen sort, expiry (30 min working → stale, 12 h → drop). Uses wall-clock time throughout (injectable for tests) rather than `time.monotonic()`, since the same timestamps are persisted; a clock jump at worst ages a session early or late.
+- [x] 2.2 Persist to `sessions.json` beside the daemon config on each change (wall-clock stamps); reload with expiry applied at startup.
+- [x] 2.3 Asyncio HTTP receiver on `127.0.0.1:<port>`: `POST /hook/<host>` only, 64 KB cap; reject missing `application/json`, any `Origin`, bad `X-Clawdmeter-Token`; `204` empty body; field whitelist on receipt; `_asciify` labels.
+- [x] 2.4 `build_ss_payload(limit)`: ≤ 6 entries, whole-entry truncation to `write_limit()`; `changed()` compares the serialized `(h,n,s)` list with the last one sent.
+- [x] 2.5 Unit tests from the fixtures: mapping (incl. unknown notification types ignored), expiry, persistence round-trip, de-dup, sort stability under tool-call churn, payload size, request rejection rules, prompt/tool fields never retained.
+- [x] 2.6 `tools/post_fixture_hooks.py`: replay fixture sequences into a running receiver (blocked / approved / several hosts / >6 sessions) — the only practical way to drive the P4 UI, which has no screenshot and no serial input.
 
 ## 3. Daemon integration
 
-- [ ] 3.1 Config: `sessions = off|on`, `sessions_port` (needs an integer reader; `read_config_flag` only does on/off), `sessions_token`; add all three to `config.example`.
-- [ ] 3.2 Import `session_status` with the package/script fallback (tray imports the Windows daemon as `daemon.…`; launchd and `__main__` run it as a script).
-- [ ] 3.3 Windows daemon: start receiver + load table in `main()`; add a `sessions_changed` event to `_wait_first`; send `ss` on change (250 ms debounce), on its own 60 s timer, and right after connect; port-in-use logs once and disables only this feature.
-- [ ] 3.4 macOS daemon: same, including porting a `_wait_first` equivalent (it currently waits on `refresh_requested` only).
-- [ ] 3.5 Ensure usage writes never include `ss` and the `qd` split logic is unaffected.
+- [x] 3.1 Config: `sessions = off|on`, `sessions_port` (generic `read_config_value` in the module), both in `config.example`. The token is **not** a config key: the daemon creates a private `sessions-token` file (mode 600) beside the config on first start, so it never has to be hand-copied into a file the user edits.
+- [x] 3.2 Import `session_status` with the package/script fallback (tray imports the Windows daemon as `daemon.…`; launchd and `__main__` run it as a script).
+- [x] 3.3 Windows daemon: start receiver + load table in `main()`; add a `sessions_changed` event to `_wait_first`; send `ss` on change (250 ms debounce), on its own 60 s timer, and right after connect; port-in-use logs once and disables only this feature.
+- [x] 3.4 macOS daemon: same, including porting a `_wait_first` equivalent (it currently waits on `refresh_requested` only).
+- [x] 3.5 Ensure usage writes never include `ss` and the `qd` split logic is unaffected.
 
 ## 4. Hooks installer: `tools/install_session_hooks.py`
 
 - [ ] 4.1 Merge the `http` hooks (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `Stop`, `StopFailure`, `SessionEnd`) into `settings.json` without disturbing existing hooks; idempotent; `--host`, `--port`, `--token`, `--config-dir` (repeatable; defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`), `--uninstall`.
-- [ ] 4.2 Generate the token on first local install and write it to the daemon config; `--token` reuses it on remotes.
+- [ ] 4.2 Read the token from the local daemon's `sessions-token` file; `--token` passes it explicitly on remotes.
 - [ ] 4.3 Warn if `allowedHttpHookUrls` is defined and doesn't match. Inside WSL, detect NAT mode and print how to enable mirrored networking.
 - [ ] 4.4 `--remote` prints the `RemoteForward` line to add.
 

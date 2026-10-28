@@ -462,7 +462,7 @@ def test_main_connect_fail_uses_reconnect_backoff():
     async def fake_acquire():
         return fake_device  # always finds device
 
-    async def fake_connect_and_run(device, event, tray_state=None):
+    async def fake_connect_and_run(device, event, tray_state=None, sessions=None):
         return False  # always fails -> fast-reconnect regime
 
     async def fake_wait_for(coro, timeout):
@@ -510,7 +510,7 @@ def test_main_reconnect_backoff_reset_on_success():
     async def fake_acquire():
         return fake_device
 
-    async def fake_connect_and_run(device, event, tray_state=None):
+    async def fake_connect_and_run(device, event, tray_state=None, sessions=None):
         idx = connect_idx[0]
         connect_idx[0] += 1
         if idx < len(connect_results):

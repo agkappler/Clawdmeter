@@ -27,6 +27,13 @@ import httpx
 from bleak import BleakClient
 from bleak.exc import BleakError
 
+# Imported as `daemon.claude_usage_daemon` by the tests; run as a script (launchd,
+# systemd), `daemon/` itself is on sys.path instead.
+try:
+    from daemon import session_status
+except ImportError:
+    import session_status
+
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -1046,7 +1053,7 @@ def unpair_macos() -> bool:
     return True
 
 
-async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
+async def connect_and_run(target, stop_event: asyncio.Event, sessions=None) -> bool:
     """Connect to a target and poll until disconnected or stopped.
 
     ``target`` is either an address string (Linux) or a BLEDevice carrying
@@ -1083,6 +1090,8 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     # The write limit bounds the optional quote of the day, so it's worth seeing.
     log(f"Connected (payload limit {session.write_limit()}B)")
     await session.setup_refresh_subscription()
+    if sessions is not None:
+        sessions.on_connect()   # a fresh link needs the whole session list again
 
     last_poll = 0.0
     used_successfully = False
@@ -1099,10 +1108,17 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     last_poll = time.time()
                     used_successfully = True
 
-            try:
-                await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
-            except asyncio.TimeoutError:
-                pass
+            # Session status: its own write, sent on change, on its own heartbeat
+            # (not tied to the usage poll), and right after connecting.
+            if sessions is not None:
+                await sessions.pump(session._write, session.write_limit())
+
+            # Wake on a refresh request, a session change or a stop, whichever
+            # comes first.
+            waits = [session.refresh_requested, stop_event]
+            if sessions is not None:
+                waits.append(sessions.changed)
+            await session_status.wait_first(*waits, timeout=TICK)
     finally:
         try:
             await client.disconnect()
@@ -1129,6 +1145,9 @@ async def main() -> None:
 
     log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
+    # Lives for the whole run (not per connection) so a BLE reconnect loses no
+    # session state. None unless `sessions = on` in the config.
+    sessions = await session_status.start_from_config(CONFIG_FILE, log)
 
     backoff = 1
     skip_addr: str | None = None  # macOS: a peripheral to skip for one cycle
@@ -1147,7 +1166,7 @@ async def main() -> None:
             continue
 
         addr = target if isinstance(target, str) else target.address
-        ok = await connect_and_run(target, stop_event)
+        ok = await connect_and_run(target, stop_event, sessions=sessions)
         if not ok:
             if sys.platform == "darwin":
                 # No string cache to drop; instead skip this stale handle on
