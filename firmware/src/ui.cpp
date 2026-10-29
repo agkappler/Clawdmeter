@@ -76,6 +76,9 @@ struct Layout {
     // Claude Code session list (BoardCaps.has_session_list). Takes over the
     // same band as the center rotator, but all of it, while any session exists.
     int16_t sess_y, sess_h;            // 0 height = not built
+    // Round boards have no spare band, so they get a badge in the ring's status
+    // line, a bezel-shaped attention pulse and a full-screen list on tap.
+    bool    sess_round;
     const lv_font_t* ticker_value_font;   // the big line (time / price)
     const lv_font_t* ticker_label_font;   // caption above it (weekday / symbol)
     const lv_font_t* ticker_sub_font;     // line below it (date / percent change)
@@ -156,6 +159,7 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_credit_1_font = &font_styrene_16;
         L.bt_credit_2_font = &font_styrene_14;
         L.content_w = L.scr_w - 2 * L.margin;
+        L.sess_round = c.has_session_list;
         return;
     }
 
@@ -1496,14 +1500,14 @@ static void build_session_panel(lv_obj_t* parent) {
         lv_obj_set_style_text_font(sess_host[i], &font_styrene_20, 0);
         lv_obj_set_style_text_color(sess_host[i], COL_DIM, 0);
         lv_label_set_long_mode(sess_host[i], LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(sess_host[i], host_w - 10);
+        lv_obj_set_size(sess_host[i], host_w - 10, lh20);
         lv_obj_set_pos(sess_host[i], host_x, mid - lh20 / 2);
 
         sess_name[i] = lv_label_create(sess_panel);
         lv_obj_set_style_text_font(sess_name[i], &font_styrene_28, 0);
         lv_obj_set_style_text_color(sess_name[i], COL_TEXT, 0);
         lv_label_set_long_mode(sess_name[i], LV_LABEL_LONG_DOT);
-        lv_obj_set_width(sess_name[i], inner_w - name_x - word_w);
+        lv_obj_set_size(sess_name[i], inner_w - name_x - word_w, lh28);   // one line, else it wraps
         lv_obj_set_pos(sess_name[i], name_x, mid - lh28 / 2);
 
         sess_word[i] = lv_label_create(sess_panel);
@@ -1513,24 +1517,156 @@ static void build_session_panel(lv_obj_t* parent) {
         lv_obj_set_pos(sess_word[i], inner_w - word_w, mid - lh20 / 2);
     }
     lv_obj_add_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);   // sessions_tick decides
+}
 
-    // Attention cue: a thick amber border around the whole screen, on the top
-    // layer so nothing covers it, and not clickable so it never eats a tap.
-    sess_cue = lv_obj_create(lv_layer_top());
+// Attention cue: a thick amber border around the whole screen (a ring hugging
+// the bezel on round panels), not clickable so it never eats a tap. On the
+// active screen rather than lv_layer_top() so `screenshot` (which snapshots the
+// screen only) can capture it; ui_init() raises it above everything else.
+static void build_session_cue(void) {
+    sess_cue = lv_obj_create(lv_screen_active());
     lv_obj_set_size(sess_cue, L.scr_w, L.scr_h);
     lv_obj_set_pos(sess_cue, 0, 0);
     lv_obj_set_style_bg_opa(sess_cue, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(sess_cue, COL_AMBER, 0);
-    lv_obj_set_style_border_width(sess_cue, 12, 0);
-    lv_obj_set_style_radius(sess_cue, 0, 0);
+    lv_obj_set_style_border_width(sess_cue, L.is_round ? 10 : 12, 0);
+    lv_obj_set_style_radius(sess_cue, L.is_round ? LV_RADIUS_CIRCLE : 0, 0);
     lv_obj_set_style_pad_all(sess_cue, 0, 0);
     lv_obj_clear_flag(sess_cue, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(sess_cue, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(sess_cue, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ---- Round boards: full-screen list, opened by a tap ----
+//
+// Laid out for a 360px circle: a header near the top, then up to six 36px rows,
+// centered vertically for however many there are. The columns (x 52..308) stay
+// inside the attention ring's inner edge (radius ~165) even on the outermost
+// rows. On the active screen (raised in ui_init), under the attention cue.
+#define SESS_ROUND_ROWS    MAX_SESSIONS
+#define SESS_OVERLAY_MS    10000      // closes itself after this long
+static lv_obj_t* sess_overlay = nullptr;
+static lv_obj_t* sess_tap = nullptr;        // transparent tap catcher over the usage view
+static lv_obj_t* sess_ov_dot[SESS_ROUND_ROWS];
+static lv_obj_t* sess_ov_name[SESS_ROUND_ROWS];
+static lv_obj_t* sess_ov_host[SESS_ROUND_ROWS];
+static lv_obj_t* sess_ov_word[SESS_ROUND_ROWS];
+static uint32_t  sess_overlay_ms = 0;       // when it opened; 0 = closed
+static const int16_t SESS_OV_ROW_H = 36, SESS_OV_MID0 = 90;   // row pitch, 1st row center (6 rows)
+static const int16_t SESS_OV_DOT_X = 52, SESS_OV_TEXT_X = 72;
+static const int16_t SESS_OV_WORD_RIGHT = 308, SESS_OV_WORD_W = 90;
+
+// Place the rows so the block of `count` rows is centered where six would sit.
+static void sess_overlay_layout(int count) {
+    const int16_t lh20 = lv_font_get_line_height(&font_styrene_20);
+    const int16_t lh14 = lv_font_get_line_height(&font_styrene_14);
+    const int16_t lh16 = lv_font_get_line_height(&font_styrene_16);
+    const int16_t shift = (int16_t)((SESS_ROUND_ROWS - count) * SESS_OV_ROW_H / 2);
+    for (int i = 0; i < SESS_ROUND_ROWS; i++) {
+        const int16_t mid = SESS_OV_MID0 + shift + i * SESS_OV_ROW_H;
+        const int16_t text_top = mid - (lh20 + lh14) / 2;
+        lv_obj_set_pos(sess_ov_dot[i], SESS_OV_DOT_X, mid - 6);
+        lv_obj_set_pos(sess_ov_name[i], SESS_OV_TEXT_X, text_top);
+        lv_obj_set_pos(sess_ov_host[i], SESS_OV_TEXT_X, text_top + lh20);
+        lv_obj_set_pos(sess_ov_word[i], SESS_OV_WORD_RIGHT - SESS_OV_WORD_W, mid - lh16 / 2);
+    }
+}
+
+static void sess_overlay_set(bool open) {
+    if (!sess_overlay) return;
+    if (open) {
+        sess_overlay_ms = lv_tick_get();
+        if (sess_overlay_ms == 0) sess_overlay_ms = 1;
+        lv_obj_clear_flag(sess_overlay, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        sess_overlay_ms = 0;
+        lv_obj_add_flag(sess_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void sess_tap_cb(lv_event_t* e) {
+    (void)e;
+    sess_cue_on = false;               // any tap acknowledges the cue
+    if (sess_showing) sess_overlay_set(sess_overlay_ms == 0);
+}
+
+static void build_session_overlay(lv_obj_t* usage_parent) {
+    // Tap catcher: transparent, covers the whole usage view, created last so it
+    // sits above the gauges (which are inert on this board anyway).
+    sess_tap = lv_obj_create(usage_parent);
+    lv_obj_set_size(sess_tap, L.scr_w, L.scr_h);
+    lv_obj_set_pos(sess_tap, 0, 0);
+    lv_obj_set_style_bg_opa(sess_tap, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(sess_tap, 0, 0);
+    lv_obj_clear_flag(sess_tap, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(sess_tap, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(sess_tap, sess_tap_cb, LV_EVENT_CLICKED, NULL);
+
+    sess_overlay = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(sess_overlay, L.scr_w, L.scr_h);
+    lv_obj_set_pos(sess_overlay, 0, 0);
+    lv_obj_set_style_bg_color(sess_overlay, COL_BG, 0);
+    lv_obj_set_style_bg_opa(sess_overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(sess_overlay, 0, 0);
+    lv_obj_set_style_radius(sess_overlay, 0, 0);
+    lv_obj_set_style_pad_all(sess_overlay, 0, 0);
+    lv_obj_clear_flag(sess_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(sess_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(sess_overlay, sess_tap_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* hdr = lv_label_create(sess_overlay);
+    lv_label_set_text(hdr, "Claude Code");
+    lv_obj_set_style_text_font(hdr, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(hdr, COL_DIM, 0);
+    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 38);
+
+    const int16_t text_w = SESS_OV_WORD_RIGHT - SESS_OV_WORD_W - SESS_OV_TEXT_X - 6;
+    for (int i = 0; i < SESS_ROUND_ROWS; i++) {
+        sess_ov_dot[i] = lv_obj_create(sess_overlay);
+        lv_obj_set_size(sess_ov_dot[i], 12, 12);
+        lv_obj_set_style_radius(sess_ov_dot[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(sess_ov_dot[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(sess_ov_dot[i], 0, 0);
+        lv_obj_clear_flag(sess_ov_dot[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(sess_ov_dot[i], LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        // Name on top, host in small print under it.
+        sess_ov_name[i] = lv_label_create(sess_overlay);
+        lv_obj_set_style_text_font(sess_ov_name[i], &font_styrene_20, 0);
+        lv_obj_set_style_text_color(sess_ov_name[i], COL_TEXT, 0);
+        lv_label_set_long_mode(sess_ov_name[i], LV_LABEL_LONG_DOT);
+        // Fixed height = one line, or LONG_DOT wraps instead of adding "...".
+        lv_obj_set_size(sess_ov_name[i], text_w, lv_font_get_line_height(&font_styrene_20));
+
+        sess_ov_host[i] = lv_label_create(sess_overlay);
+        lv_obj_set_style_text_font(sess_ov_host[i], &font_styrene_14, 0);
+        lv_obj_set_style_text_color(sess_ov_host[i], COL_DIM, 0);
+        lv_label_set_long_mode(sess_ov_host[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_size(sess_ov_host[i], text_w, lv_font_get_line_height(&font_styrene_14));
+
+        sess_ov_word[i] = lv_label_create(sess_overlay);
+        lv_obj_set_style_text_font(sess_ov_word[i], &font_styrene_16, 0);
+        lv_obj_set_style_text_align(sess_ov_word[i], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_width(sess_ov_word[i], SESS_OV_WORD_W);
+    }
+    sess_overlay_layout(SESS_ROUND_ROWS);
+    lv_obj_add_flag(sess_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void sess_render_rows(lv_obj_t* const* dot, lv_obj_t* const* host,
+                             lv_obj_t* const* name, lv_obj_t* const* word, int rows);
+
 static void sess_render(void) {
-    for (int i = 0; i < MAX_SESSIONS; i++) {
+    if (sess_panel)   sess_render_rows(sess_dot, sess_host, sess_name, sess_word, MAX_SESSIONS);
+    if (sess_overlay) {
+        sess_render_rows(sess_ov_dot, sess_ov_host, sess_ov_name, sess_ov_word, SESS_ROUND_ROWS);
+        sess_overlay_layout(sess_count);
+    }
+}
+
+static void sess_render_rows(lv_obj_t* const* sess_dot, lv_obj_t* const* sess_host,
+                             lv_obj_t* const* sess_name, lv_obj_t* const* sess_word, int rows) {
+    for (int i = 0; i < rows; i++) {
         lv_obj_t* parts[] = { sess_dot[i], sess_host[i], sess_name[i], sess_word[i] };
         if (i >= sess_count) {
             for (lv_obj_t* p : parts) lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
@@ -1572,7 +1708,7 @@ static void sess_track_needs(void) {
 
 // Called every loop from ui_tick_anim(), after update_view_state().
 static void sessions_tick(uint32_t now) {
-    if (!sess_panel) return;
+    if (!sess_panel && !sess_overlay) return;
     if (sess_dirty) {
         sess_dirty = false;
         sess_render();
@@ -1581,7 +1717,12 @@ static void sessions_tick(uint32_t now) {
 
     const bool live = sess_received && (now - sess_last_ms) < SESS_LIVE_MS;
     const bool show = live && sess_count > 0 && view_state != 0;
-    if (show != sess_showing) {
+    if (show != sess_showing && sess_overlay) {
+        // Round: the badge lives in the status line (ui_tick_anim); the list
+        // only exists while it's open, so close it when there's nothing to list.
+        sess_showing = show;
+        if (!show) sess_overlay_set(false);
+    } else if (show != sess_showing) {
         sess_showing = show;
         if (show) lv_obj_clear_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);
         else      lv_obj_add_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);
@@ -1596,6 +1737,8 @@ static void sessions_tick(uint32_t now) {
         if (!show && ticker_panel) lv_label_set_text(lbl_title, "Usage");
         ticker_dirty = true;
     }
+
+    if (sess_overlay_ms && now - sess_overlay_ms >= SESS_OVERLAY_MS) sess_overlay_set(false);
 
     static int last_phase = -1;
     if (sess_cue_on && show) {
@@ -1837,6 +1980,8 @@ static void init_usage_screen(lv_obj_t* scr) {
     // Same z-order reasoning as the control bar: created after pair/idle so it
     // isn't buried under them (it must be tappable on the idle screen too).
     if (L.sess_h > 0) build_session_panel(usage_container);
+    if (L.sess_round) build_session_overlay(usage_container);
+    if (L.sess_h > 0 || L.sess_round) build_session_cue();
 
     // Status line — always visible on the usage view. Driven by ui_tick_anim().
     lbl_anim = lv_label_create(usage_container);
@@ -1848,6 +1993,8 @@ static void init_usage_screen(lv_obj_t* scr) {
         // which the much-thicker ring/fill leaves almost no clearance against.
         lv_obj_set_style_text_font(lbl_anim, &font_mono_18, 0);
         lv_obj_align(lbl_anim, LV_ALIGN_CENTER, 0, 0);
+        // Recolor markup carries the session badge's colors (sess_badge_text).
+        if (L.sess_round) lv_label_set_recolor(lbl_anim, true);
     } else {
         lv_obj_set_style_text_font(lbl_anim, &font_mono_32, 0);
         lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
@@ -1902,6 +2049,10 @@ void ui_init(void) {
         lv_obj_set_pos(battery_img, L.scr_w - 48 - L.margin, L.title_y);
         if (L.minimal_header) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
     }
+
+    // Session list overlay, then its attention cue, above everything built here.
+    if (sess_overlay) lv_obj_move_foreground(sess_overlay);
+    if (sess_cue)     lv_obj_move_foreground(sess_cue);
 }
 
 void ui_update_quote_of_day(const char* text, const char* author) {
@@ -2041,6 +2192,24 @@ static void update_view_state(void) {
     }
 }
 
+// "<glyph> #e8734a 1 needs you# #b0aea5 +2#" — LVGL recolor markup. Only counts
+// go into it, never session names, so a '#' in a name can't break the markup.
+static void sess_badge_text(char* buf, size_t len, const char* glyph) {
+    int n[4] = {0, 0, 0, 0};
+    for (int i = 0; i < sess_count; i++) if (sess_rows[i].state <= SESSION_STALE) n[sess_rows[i].state]++;
+    static const uint8_t order[] = { SESSION_NEEDS_YOU, SESSION_YOUR_TURN, SESSION_WORKING, SESSION_STALE };
+    uint8_t top = SESSION_STALE;
+    for (uint8_t s : order) if (n[s] > 0) { top = s; break; }
+    const char* hex = top == SESSION_NEEDS_YOU ? "e8734a" : top == SESSION_YOUR_TURN ? "788c5d"
+                    : top == SESSION_WORKING ? "4cbfb6" : "b0aea5";   // == THEME_AMBER/GREEN/TEAL/DIM
+    char what[24];
+    if (top == SESSION_NEEDS_YOU) snprintf(what, sizeof(what), "%d need%s you", n[top], n[top] == 1 ? "s" : "");
+    else                          snprintf(what, sizeof(what), "%d %s", n[top], sess_word_text(top));
+    const int others = sess_count - n[top];
+    if (others > 0) snprintf(buf, len, "%s #%s %s# #b0aea5 +%d#", glyph, hex, what, others);
+    else            snprintf(buf, len, "%s #%s %s#", glyph, hex, what);
+}
+
 void ui_tick_anim(void) {
     update_view_state();
     if (view_state == 1) creature_tick();   // animate the sleeping creature on the idle screen
@@ -2097,9 +2266,15 @@ void ui_tick_anim(void) {
     }
 
     // All states share the whimsical style: "<glyph> <Title-case word>…"
-    static char buf[80];
-    snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
-             spinner_frames[anim_spinner_idx], text);
+    static char buf[96];
+    if (L.sess_round && sess_showing && s_ble_connected) {
+        // Round boards: the status line becomes the session badge — the most
+        // urgent state's count in its color, plus how many others there are.
+        sess_badge_text(buf, sizeof(buf), spinner_frames[anim_spinner_idx]);
+    } else {
+        snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
+                 spinner_frames[anim_spinner_idx], text);
+    }
     lv_label_set_text(lbl_anim, buf);
 }
 

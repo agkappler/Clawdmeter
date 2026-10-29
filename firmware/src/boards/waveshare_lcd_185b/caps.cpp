@@ -10,6 +10,7 @@ static const BoardCaps caps = {
     .has_battery = true,
     .has_imu = true,
     .is_round = true,
+    .has_session_list = true,   // round style: ring badge + tap-to-open list
 };
 
 const BoardCaps& board_caps(void) { return caps; }

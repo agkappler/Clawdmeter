@@ -20,7 +20,8 @@ struct BoardCaps {
     bool    has_imu;         // QMI8658 (or compatible) is populated
     bool    is_round;        // circular panel — shared UI switches to a round-safe layout
     bool    has_media_controls;  // renders the bottom media/volume touch bar on the usage screen
-    bool    has_session_list;    // shows the Claude Code session list (openspec add-session-status)
+    bool    has_session_list;    // shows Claude Code sessions (openspec add-session-status): a
+                                 // center-band list on tall boards, a badge + tap-to-open list on round ones
 };
 
 const BoardCaps& board_caps(void);

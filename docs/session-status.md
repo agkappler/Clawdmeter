@@ -10,8 +10,14 @@ It covers sessions on the machine running the daemon, in WSL, and on SSH
 remotes, all on one screen. The machine each one runs on is shown next to its
 name.
 
-> **Boards:** only the ESP32-P4 Touch LCD-5 draws the list today. It's the only
-> board with a big enough empty band. Other boards ignore the data.
+> **Boards:**
+> - **Round LCD-1.85B:** the status line in the middle of the ring becomes a
+>   badge, such as "1 needs you +3", and the attention pulse is a ring around
+>   the bezel. Tap the screen to open the full list; tap again, or wait 10
+>   seconds, to close it.
+> - **ESP32-P4 Touch LCD-5:** the list fills the band between the usage panels
+>   and the media buttons.
+> - Other boards ignore the data for now.
 >
 > **Daemons:** the Python daemons (Windows tray, macOS/Linux). The Bash and Rust
 > daemons don't support it.

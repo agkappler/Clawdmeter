@@ -48,6 +48,13 @@
 - [ ] 6.5 Verify on P4 hardware with `tools/post_fixture_hooks.py` driving it (photo/eyeball — no screenshot on this board).
 - [x] 6.6 Build every env to confirm boards without the flag are unchanged. All 9 envs build.
 
+## 6b. Round board (LCD-1.85B) — the user's actual board
+
+- [x] 6b.1 `has_session_list` on `waveshare_lcd_185b`; `L.sess_round` picks the round style.
+- [x] 6b.2 Badge in the ring's center status line (most urgent state's count in its color, plus `+N` others), circular bezel pulse, tap-to-open full-screen list (6 rows centered, auto-close after 10 s).
+- [x] 6b.3 Verified on hardware by screenshot (badge, both pulse phases, 4- and 6-row lists, long-name truncation) using a temporary auto-open build, then the normal build.
+- [ ] 6b.4 A real finger tap opens and closes the list, and acknowledges the pulse.
+
 ## 7. End-to-end and docs
 
 - [ ] 7.1 End-to-end on Windows: sessions in native Windows, WSL (mirrored) and over SSH all appear with correct host tags; permission prompt → amber within ~1 s; approve → working; exit → removed; daemon restart keeps a blocked session visible.

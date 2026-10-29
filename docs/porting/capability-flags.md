@@ -32,7 +32,7 @@ These live only in `BoardCaps` (no `BOARD_HAS_*` macro). Leave them out of a boa
 |----------------------|---------------|
 | `is_round`           | Round-safe usage layout (semicircle gauges, no logo/title). |
 | `has_media_controls` | The bottom media/volume touch bar and its BLE consumer-control report (P4 only; see `openspec/changes/add-media-volume-controls`). |
-| `has_session_list`   | The Claude Code session list and its attention cue, drawn in the center band (P4 only; see `openspec/changes/add-session-status`). Needs a band of at least 240px between the usage panels and whatever is anchored to the bottom. |
+| `has_session_list`   | Claude Code session status and its attention cue (see `openspec/changes/add-session-status`). On round boards (LCD-1.85B): a badge in the ring's status line plus a full-screen list on tap. On tall boards (P4): a list in the center band, which needs at least 240px between the usage panels and whatever is anchored to the bottom. |
 
 ## Build-flag macros
 
