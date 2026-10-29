@@ -5,8 +5,8 @@ The P4 board has no screenshot and no serial input, so this is how to put
 known session states on the device for UI work without running real sessions.
 Events come from daemon/tests/fixtures/hooks/ (real, scrubbed captures).
 
-  python3 tools/post_fixture_hooks.py demo      # 4 sessions across hosts, one blocked
-  python3 tools/post_fixture_hooks.py many      # 8 sessions (device shows 6)
+  python3 tools/post_fixture_hooks.py demo      # 5 sessions across hosts, one blocked
+  python3 tools/post_fixture_hooks.py many      # 8 more (round board: 4 rows + "+N more")
   python3 tools/post_fixture_hooks.py replay    # the captured interactive session, in real time
   python3 tools/post_fixture_hooks.py clear     # end every session this tool created
 
@@ -66,6 +66,7 @@ DEMO = [  # host, sid, folder, events in order (last one decides the state)
     ("wsl", "b", "/home/user/api", ["UserPromptSubmit", "PreToolUse", "PermissionRequest"]),
     ("devbox", "c", "/srv/infra", ["UserPromptSubmit", "Stop"]),
     ("win", "d", "C:\\src\\Clawdmeter", ["UserPromptSubmit", "PreToolUse"]),
+    ("mac", "e", "/srv/billing-service", ["UserPromptSubmit", "PreToolUse"]),
 ]
 
 

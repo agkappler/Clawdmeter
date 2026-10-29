@@ -139,7 +139,7 @@ within a second or two. To test the device without real sessions, replay
 captured events:
 
 ```bash
-python3 tools/post_fixture_hooks.py demo    # 4 sessions across hosts, one needing you
+python3 tools/post_fixture_hooks.py demo    # 5 sessions across hosts, one needing you
 python3 tools/post_fixture_hooks.py clear   # remove them
 ```
 
