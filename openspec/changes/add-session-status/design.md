@@ -110,7 +110,7 @@ With `networkingMode=mirrored` in `.wslconfig`, WSL's localhost is the Windows h
 - **Views:** the list lives in `usage_container`, not `usage_group`, so it stays visible when usage data is stale, and it's raised with `lv_obj_move_foreground()` after the pair and idle groups are built.
   - Pairing view: the list is hidden, as the media bar is.
   - Idle view: the sleeping creature is hidden while the list is non-empty, since the list sits where the creature is centered.
-- **Attention cue:** when a session newly enters "needs you", the screen border pulses amber. It stops on a tap on the list (acknowledged until the next new "needs you" transition) or when no session is in "needs you" any more. "Your turn" never triggers it. The P4 has no pomodoro and no working sound (`sound.cpp` is a no-op), so the cue there is visual only; the color is still amber rather than red so it won't collide with the pomodoro's red flash when square boards get the list in phase 2.
+- **Attention cue:** when a session newly enters "needs you", the screen border pulses red (amber at first; switched at the user's request because amber is the round screen's accent color and didn't read as an alert). It stops on a tap on the list (acknowledged until the next new "needs you" transition) or when no session is in "needs you" any more. "Your turn" never triggers it. Neither the P4 nor the round board has a working sound path (`sound.cpp` is a no-op), so the cue is visual only. When square boards get the list (phase 2), the red pulse will need to be told apart from their pomodoro's red flash.
 
 ## Risks / Trade-offs
 

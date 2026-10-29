@@ -97,7 +97,7 @@ On boards where `board_caps().has_session_list` is true, the firmware SHALL rend
 
 #### Scenario: New blocked session
 - **WHEN** a session transitions into "needs you"
-- **THEN** the list shows it first with an amber indicator and the attention cue starts
+- **THEN** the list shows it first with a red indicator and the attention cue starts
 
 #### Scenario: Acknowledge
 - **WHEN** the user taps the session list while the cue is active

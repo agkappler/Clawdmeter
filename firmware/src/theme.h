@@ -22,4 +22,8 @@
 #define THEME_TEAL     lv_color_hex(0x4cbfb6)
 #define THEME_AMBER    lv_color_hex(0xe8734a)
 #define THEME_RED      lv_color_hex(0xc0392b)
+// Warning gold, for session status "your turn" (red = needs you). THEME_AMBER is
+// really the terra-cotta accent, too close to red to read as a separate level.
+// KEEP IN SYNC with the "e3b341" recolor hex in ui.cpp's sess_hex().
+#define THEME_GOLD     lv_color_hex(0xe3b341)
 #define THEME_BAR_BG   lv_color_hex(0x2a2a28)   // unfilled bar track

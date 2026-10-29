@@ -210,7 +210,8 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
     - The attention pulse is an 8px circular border at the bezel (180..172), so it never covers the home ring.
     - The cue lives on the **active screen, not `lv_layer_top()`**, because `screenshot` only snapshots the screen; `ui_init()` raises it last.
     - Verified by screenshot on real hardware for 0, 4, 5 and 13 sessions, 2026-10-28. `screenshot.sh` needs `ffmpeg` for its PNG step.
-  - **P4 display:** `BoardCaps.has_session_list`. The list takes the whole center band and hides the rotator while it has rows and an `ss` write landed within 3 min. It brings back the title clock, hides the idle creature, and hides on the pairing view. An amber border on `lv_layer_top()` blinks when a session newly needs you, until a tap or until none does.
+  - **P4 display:** `BoardCaps.has_session_list`. The list takes the whole center band and hides the rotator while it has rows and an `ss` write landed within 3 min. It brings back the title clock, hides the idle creature, and hides on the pairing view. A red border (on the active screen, see below) blinks when a session newly needs you, until a tap or until none does.
+  - **Session colors (user's choice, 2026-10-28):** red = needs you (`THEME_RED`), gold = your turn (new `THEME_GOLD` `0xe3b341`, warning level), teal = working, dim = stale. `THEME_AMBER` is really the terra-cotta brand accent: as "needs you" it didn't stand out, and as "your turn" it was too close to red. The recolor hexes in `sess_hex()` must match the theme tokens.
   - **Testing tools:** `tools/install_session_hooks.py` writes the hooks; `tools/post_fixture_hooks.py` replays fixtures into a running receiver, the only way to drive the P4 UI since that board has no screenshot or serial input.
   - **P4 layout not yet seen on hardware:** only the round board was available.
 

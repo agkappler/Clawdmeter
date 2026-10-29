@@ -399,6 +399,7 @@ static void compute_layout(const BoardCaps& c) {
 #define COL_GREEN     THEME_GREEN
 #define COL_TEAL      THEME_TEAL
 #define COL_AMBER     THEME_AMBER
+#define COL_GOLD      THEME_GOLD
 #define COL_RED       THEME_RED
 #define COL_BAR_BG    THEME_BAR_BG
 
@@ -463,7 +464,7 @@ static uint32_t    sess_last_ms = 0;      // lv_tick when the last "ss" write la
 static bool        sess_received = false; // any "ss" write since boot
 static bool        sess_dirty = false;    // re-render pending
 static bool        sess_showing = false;  // list on screen (replaces the rotator, brings back the title clock)
-static bool        sess_cue_on = false;   // amber attention pulse armed
+static bool        sess_cue_on = false;   // red attention pulse armed
 static bool        sess_home_on = false;  // round boards: session home screen replaces the gauges
 // The quote card is a paragraph, not a number — 6s isn't enough to read one.
 #define TICKER_QOD_MS  12000
@@ -1433,14 +1434,14 @@ static lv_obj_t* sess_dot[MAX_SESSIONS];
 static lv_obj_t* sess_host[MAX_SESSIONS];
 static lv_obj_t* sess_name[MAX_SESSIONS];
 static lv_obj_t* sess_word[MAX_SESSIONS];
-static lv_obj_t* sess_cue = nullptr;      // amber screen border, on the top layer
+static lv_obj_t* sess_cue = nullptr;      // red screen border (see build_session_cue)
 static char      sess_needs_prev[MAX_SESSIONS][32];
 static int       sess_needs_prev_n = 0;
 
 static lv_color_t sess_color(uint8_t s) {
     switch (s) {
-        case SESSION_NEEDS_YOU: return COL_AMBER;
-        case SESSION_YOUR_TURN: return COL_GREEN;
+        case SESSION_NEEDS_YOU: return COL_RED;   // red, not the accent amber: it must stand out
+        case SESSION_YOUR_TURN: return COL_GOLD;    // warning level, below red
         case SESSION_WORKING:   return COL_TEAL;
         default:                return COL_DIM;
     }
@@ -1521,7 +1522,7 @@ static void build_session_panel(lv_obj_t* parent) {
     lv_obj_add_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);   // sessions_tick decides
 }
 
-// Attention cue: a thick amber border around the whole screen (a ring hugging
+// Attention cue: a thick red border around the whole screen (a ring hugging
 // the bezel on round panels), not clickable so it never eats a tap. On the
 // active screen rather than lv_layer_top() so `screenshot` (which snapshots the
 // screen only) can capture it; ui_init() raises it above everything else.
@@ -1530,7 +1531,7 @@ static void build_session_cue(void) {
     lv_obj_set_size(sess_cue, L.scr_w, L.scr_h);
     lv_obj_set_pos(sess_cue, 0, 0);
     lv_obj_set_style_bg_opa(sess_cue, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_color(sess_cue, COL_AMBER, 0);
+    lv_obj_set_style_border_color(sess_cue, COL_RED, 0);
     lv_obj_set_style_border_width(sess_cue, L.is_round ? 8 : 12, 0);   // round: clears the home ring (sess_home)
     lv_obj_set_style_radius(sess_cue, L.is_round ? LV_RADIUS_CIRCLE : 0, 0);
     lv_obj_set_style_pad_all(sess_cue, 0, 0);
@@ -1688,7 +1689,7 @@ static void build_session_home(lv_obj_t* parent) {
 }
 
 static const char* sess_hex(uint8_t s) {   // recolor hex for a state (== THEME_*)
-    return s == SESSION_NEEDS_YOU ? "e8734a" : s == SESSION_YOUR_TURN ? "788c5d"
+    return s == SESSION_NEEDS_YOU ? "c0392b" : s == SESSION_YOUR_TURN ? "e3b341"
          : s == SESSION_WORKING   ? "4cbfb6" : "b0aea5";
 }
 
@@ -2306,8 +2307,7 @@ static void sess_badge_text(char* buf, size_t len, const char* glyph) {
     static const uint8_t order[] = { SESSION_NEEDS_YOU, SESSION_YOUR_TURN, SESSION_WORKING, SESSION_STALE };
     uint8_t top = SESSION_STALE;
     for (uint8_t s : order) if (n[s] > 0) { top = s; break; }
-    const char* hex = top == SESSION_NEEDS_YOU ? "e8734a" : top == SESSION_YOUR_TURN ? "788c5d"
-                    : top == SESSION_WORKING ? "4cbfb6" : "b0aea5";   // == THEME_AMBER/GREEN/TEAL/DIM
+    const char* hex = sess_hex(top);
     char what[24];
     if (top == SESSION_NEEDS_YOU) snprintf(what, sizeof(what), "%d need%s you", n[top], n[top] == 1 ? "s" : "");
     else                          snprintf(what, sizeof(what), "%d %s", n[top], sess_word_text(top));

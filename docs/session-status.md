@@ -3,7 +3,8 @@
 Shows your Claude Code sessions on the device: which are **working**, which
 **need you** (a permission prompt or a question is waiting), which are waiting
 for your next prompt (**your turn**), and which have gone quiet (**stale**).
-When a session newly needs you, the screen border blinks amber until you tap
+Colors: **red** needs you, **gold** your turn, **teal** working, gray stale.
+When a session newly needs you, the screen border blinks red until you tap
 the list or answer the prompt.
 
 It covers sessions on the machine running the daemon, in WSL, and on SSH
