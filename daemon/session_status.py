@@ -216,11 +216,24 @@ class SessionTracker:
         return [{"h": e.host, "n": labels[(e.host, e.sid)], "s": shown_state(e)}
                 for e in ordered[:MAX_SESSIONS]]
 
+    def total(self) -> int:
+        """Live sessions, including any beyond the MAX_SESSIONS sent."""
+        self._prune(self._clock())
+        return len(self._entries)
+
     def payload(self, limit: int) -> bytes:
-        """The "ss" write, dropping whole rows from the end until it fits."""
+        """The "ss" write, dropping whole rows from the end until it fits.
+
+        "sn" carries the real total when it's more than the rows sent, so the
+        device can say "+9 more" rather than guess from the rows it has.
+        """
         rows = self.rows()
+        total = self.total()
         while True:
-            data = json.dumps({"ss": rows}, separators=(",", ":")).encode()
+            msg = {"ss": rows}
+            if total > len(rows):
+                msg["sn"] = total
+            data = json.dumps(msg, separators=(",", ":")).encode()
             if len(data) <= limit or not rows:
                 return data
             rows = rows[:-1]

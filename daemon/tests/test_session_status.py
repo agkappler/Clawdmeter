@@ -193,6 +193,19 @@ def test_at_most_six_rows():
     assert len(t.rows()) == ss.MAX_SESSIONS
 
 
+def test_total_sent_only_when_rows_are_cut():
+    t = tracker()
+    for i in range(4):
+        t.handle_event("mac", fx("PreToolUse", session_id=str(i), cwd=f"/p/s{i}"))
+    assert "sn" not in json.loads(t.payload(500))
+    for i in range(4, 10):
+        t.handle_event("mac", fx("PreToolUse", session_id=str(i), cwd=f"/p/s{i}"))
+    msg = json.loads(t.payload(500))
+    assert len(msg["ss"]) == 6 and msg["sn"] == 10
+    small = json.loads(t.payload(120))          # rows dropped to fit: total still right
+    assert len(small["ss"]) < 6 and small["sn"] == 10
+
+
 # -- persistence -----------------------------------------------------------------
 
 def test_blocked_session_survives_restart(tmp_path):
@@ -230,7 +243,7 @@ def test_payload_shape_and_truncation_by_whole_rows():
     assert json.loads(full)["ss"][0] == {"h": "mac", "n": "session-0", "s": 0}
     small = t.payload(80)
     assert len(small) <= 80 and json.loads(small)["ss"]   # valid JSON, fewer rows
-    assert t.payload(5) == b'{"ss":[]}'
+    assert json.loads(t.payload(5))["ss"] == []   # nothing fits: no rows, total still said
 
 
 def test_empty_table_sends_explicit_empty_list():

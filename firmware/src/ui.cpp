@@ -458,11 +458,13 @@ static bool      ticker_dirty = true;    // re-render pending (new card or new d
 // list has its own liveness, based on the daemon's 60 s "ss" heartbeat.
 static SessionData sess_rows[MAX_SESSIONS] = {};
 static int         sess_count = 0;
+static int         sess_total = 0;        // live sessions incl. ones the daemon didn't send
 static uint32_t    sess_last_ms = 0;      // lv_tick when the last "ss" write landed
 static bool        sess_received = false; // any "ss" write since boot
 static bool        sess_dirty = false;    // re-render pending
 static bool        sess_showing = false;  // list on screen (replaces the rotator, brings back the title clock)
 static bool        sess_cue_on = false;   // amber attention pulse armed
+static bool        sess_home_on = false;  // round boards: session home screen replaces the gauges
 // The quote card is a paragraph, not a number — 6s isn't enough to read one.
 #define TICKER_QOD_MS  12000
 #define TICKER_FADE_MS 300
@@ -1529,7 +1531,7 @@ static void build_session_cue(void) {
     lv_obj_set_pos(sess_cue, 0, 0);
     lv_obj_set_style_bg_opa(sess_cue, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(sess_cue, COL_AMBER, 0);
-    lv_obj_set_style_border_width(sess_cue, L.is_round ? 10 : 12, 0);
+    lv_obj_set_style_border_width(sess_cue, L.is_round ? 8 : 12, 0);   // round: clears the home ring (sess_home)
     lv_obj_set_style_radius(sess_cue, L.is_round ? LV_RADIUS_CIRCLE : 0, 0);
     lv_obj_set_style_pad_all(sess_cue, 0, 0);
     lv_obj_clear_flag(sess_cue, LV_OBJ_FLAG_CLICKABLE);
@@ -1537,63 +1539,145 @@ static void build_session_cue(void) {
     lv_obj_add_flag(sess_cue, LV_OBJ_FLAG_HIDDEN);
 }
 
-// ---- Round boards: full-screen list, opened by a tap ----
+// ---- Round boards: the session home screen ----
 //
-// Laid out for a 360px circle: a header near the top, then up to six 36px rows,
-// centered vertically for however many there are. The columns (x 52..308) stay
-// inside the attention ring's inner edge (radius ~165) even on the outermost
-// rows. On the active screen (raised in ui_init), under the attention cue.
-#define SESS_ROUND_ROWS    MAX_SESSIONS
-#define SESS_OVERLAY_MS    10000      // closes itself after this long
-static lv_obj_t* sess_overlay = nullptr;
-static lv_obj_t* sess_tap = nullptr;        // transparent tap catcher over the usage view
-static lv_obj_t* sess_ov_dot[SESS_ROUND_ROWS];
-static lv_obj_t* sess_ov_name[SESS_ROUND_ROWS];
-static lv_obj_t* sess_ov_host[SESS_ROUND_ROWS];
-static lv_obj_t* sess_ov_word[SESS_ROUND_ROWS];
-static uint32_t  sess_overlay_ms = 0;       // when it opened; 0 = closed
-static const int16_t SESS_OV_ROW_H = 36, SESS_OV_MID0 = 90;   // row pitch, 1st row center (6 rows)
-static const int16_t SESS_OV_DOT_X = 52, SESS_OV_TEXT_X = 72;
-static const int16_t SESS_OV_WORD_RIGHT = 308, SESS_OV_WORD_W = 90;
-
-// Place the rows so the block of `count` rows is centered where six would sit.
-static void sess_overlay_layout(int count) {
-    const int16_t lh20 = lv_font_get_line_height(&font_styrene_20);
-    const int16_t lh14 = lv_font_get_line_height(&font_styrene_14);
-    const int16_t lh16 = lv_font_get_line_height(&font_styrene_16);
-    const int16_t shift = (int16_t)((SESS_ROUND_ROWS - count) * SESS_OV_ROW_H / 2);
-    for (int i = 0; i < SESS_ROUND_ROWS; i++) {
-        const int16_t mid = SESS_OV_MID0 + shift + i * SESS_OV_ROW_H;
-        const int16_t text_top = mid - (lh20 + lh14) / 2;
-        lv_obj_set_pos(sess_ov_dot[i], SESS_OV_DOT_X, mid - 6);
-        lv_obj_set_pos(sess_ov_name[i], SESS_OV_TEXT_X, text_top);
-        lv_obj_set_pos(sess_ov_host[i], SESS_OV_TEXT_X, text_top + lh20);
-        lv_obj_set_pos(sess_ov_word[i], SESS_OV_WORD_RIGHT - SESS_OV_WORD_W, mid - lh16 / 2);
-    }
-}
-
-static void sess_overlay_set(bool open) {
-    if (!sess_overlay) return;
-    if (open) {
-        sess_overlay_ms = lv_tick_get();
-        if (sess_overlay_ms == 0) sess_overlay_ms = 1;
-        lv_obj_clear_flag(sess_overlay, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        sess_overlay_ms = 0;
-        lv_obj_add_flag(sess_overlay, LV_OBJ_FLAG_HIDDEN);
-    }
-}
+// While any session exists, round boards swap the big usage gauges for this:
+// a thin two-part ring (current on top, weekly on the bottom, same split as the
+// usage view), each percentage and reset time just inside its half, and up to
+// five two-line session rows in the middle. A tap shows the classic usage view
+// for SESS_PEEK_MS. Geometry is for a 360px circle: the 14px ring runs from
+// radius 170 to 156, just inside the 8px attention ring at the bezel (180..172)
+// so the two never overlap; the row columns (x 66..296) clear the ring even on
+// the outermost rows, and the captions sit where the circle is still ~200px wide.
+#define SESS_HOME_ROWS  5
+#define SESS_PEEK_MS    10000
+#define HOME_ARC_R      170
+#define HOME_ARC_W      14
+static lv_obj_t* sess_home = nullptr;
+static lv_obj_t* sess_tap = nullptr;        // transparent tap catcher over the whole usage view
+static lv_obj_t* home_arc_cur = nullptr;
+static lv_obj_t* home_arc_wk = nullptr;
+static lv_obj_t* home_cur_pct, *home_cur_cap, *home_wk_pct, *home_wk_cap;
+static lv_obj_t* home_dot[SESS_HOME_ROWS];
+static lv_obj_t* home_name[SESS_HOME_ROWS];
+static lv_obj_t* home_sub[SESS_HOME_ROWS];  // "<state> <host>", recolored
+static uint32_t  sess_peek_ms = 0;          // classic-view peek started; 0 = not peeking
+// Last usage numbers, kept so the home screen can redraw them stale/fresh.
+static float     home_s_pct = 0, home_w_pct = 0;
+static int       home_s_reset = -1, home_w_reset = -1;
+static bool      home_have_usage = false;
+static int       home_fresh = -1;           // last drawn freshness (-1 unknown)
+static const int16_t HOME_ROW_H = 40, HOME_MID0 = 100;   // 5 rows: centers 100..260
+static const int16_t HOME_DOT_X = 66, HOME_TEXT_X = 84, HOME_TEXT_W = 212;
 
 static void sess_tap_cb(lv_event_t* e) {
     (void)e;
     sess_cue_on = false;               // any tap acknowledges the cue
-    if (sess_showing) sess_overlay_set(sess_overlay_ms == 0);
+    if (!sess_showing) return;
+    if (sess_home_on) {
+        sess_peek_ms = lv_tick_get();
+        if (sess_peek_ms == 0) sess_peek_ms = 1;
+    } else {
+        sess_peek_ms = 0;
+    }
 }
 
-static void build_session_overlay(lv_obj_t* usage_parent) {
-    // Tap catcher: transparent, covers the whole usage view, created last so it
-    // sits above the gauges (which are inert on this board anyway).
-    sess_tap = lv_obj_create(usage_parent);
+static lv_obj_t* make_home_arc(lv_obj_t* parent, int32_t a0, int32_t a1) {
+    lv_obj_t* arc = make_gauge_arc(parent, a0, a1);
+    lv_obj_set_size(arc, 2 * HOME_ARC_R, 2 * HOME_ARC_R);
+    lv_obj_set_pos(arc, L.round_cx - HOME_ARC_R, L.round_cy - HOME_ARC_R);
+    lv_obj_set_style_arc_width(arc, HOME_ARC_W, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, HOME_ARC_W, LV_PART_INDICATOR);
+    return arc;
+}
+
+static lv_obj_t* make_home_label(lv_obj_t* parent, const lv_font_t* font, lv_color_t color) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_label_set_text(l, "");
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, color, 0);
+    return l;
+}
+
+// Redraw the usage half of the home screen from the stored numbers. Stale data
+// reads "--" rather than a number that might be hours old.
+static void home_draw_usage(bool fresh) {
+    if (!sess_home) return;
+    char buf[32], cap[40];
+    const bool ok = fresh && home_have_usage;
+    if (ok) snprintf(buf, sizeof(buf), "%d%%", (int)(home_s_pct + 0.5f)); else snprintf(buf, sizeof(buf), "--");
+    lv_label_set_text(home_cur_pct, buf);
+    if (ok) snprintf(buf, sizeof(buf), "%d%%", (int)(home_w_pct + 0.5f)); else snprintf(buf, sizeof(buf), "--");
+    lv_label_set_text(home_wk_pct, buf);
+
+    format_reset_time(ok ? home_s_reset : -1, buf, sizeof(buf));
+    snprintf(cap, sizeof(cap), "Current  %s", ok ? buf + 10 : "");   // drop "Resets in "
+    lv_label_set_text(home_cur_cap, ok && home_s_reset >= 0 ? cap : "Current");
+    format_reset_time(ok ? home_w_reset : -1, buf, sizeof(buf));
+    snprintf(cap, sizeof(cap), "Weekly  %s", ok ? buf + 10 : "");
+    lv_label_set_text(home_wk_cap, ok && home_w_reset >= 0 ? cap : "Weekly");
+
+    set_gauge(home_arc_cur, ok ? (int)(home_s_pct + 0.5f) : 0, pct_color(home_s_pct));
+    set_gauge(home_arc_wk,  ok ? (int)(home_w_pct + 0.5f) : 0, pct_color(home_w_pct));
+}
+
+static void home_set_usage(const UsageData* d) {
+    home_s_pct = d->session_pct;
+    home_w_pct = d->weekly_pct;
+    home_s_reset = d->session_reset_mins;
+    home_w_reset = d->weekly_reset_mins;
+    home_have_usage = true;
+    home_fresh = -1;   // force a redraw on the next sessions_tick
+}
+
+static void build_session_home(lv_obj_t* parent) {
+    sess_home = lv_obj_create(parent);
+    lv_obj_set_size(sess_home, L.scr_w, L.scr_h);
+    lv_obj_set_pos(sess_home, 0, 0);
+    lv_obj_set_style_bg_opa(sess_home, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(sess_home, 0, 0);
+    lv_obj_set_style_pad_all(sess_home, 0, 0);
+    lv_obj_clear_flag(sess_home, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(sess_home, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    home_arc_cur = make_home_arc(sess_home, 180, 360);   // top half = current
+    home_arc_wk  = make_home_arc(sess_home, 0, 180);     // bottom half = weekly
+
+    home_cur_pct = make_home_label(sess_home, &font_styrene_24, COL_TEXT);
+    lv_obj_align(home_cur_pct, LV_ALIGN_TOP_MID, 0, 24);
+    home_cur_cap = make_home_label(sess_home, &font_styrene_14, COL_DIM);
+    lv_obj_align(home_cur_cap, LV_ALIGN_TOP_MID, 0, 54);
+    home_wk_cap = make_home_label(sess_home, &font_styrene_14, COL_DIM);
+    lv_obj_align(home_wk_cap, LV_ALIGN_BOTTOM_MID, 0, -54);
+    home_wk_pct = make_home_label(sess_home, &font_styrene_24, COL_TEXT);
+    lv_obj_align(home_wk_pct, LV_ALIGN_BOTTOM_MID, 0, -24);
+
+    const int16_t lh20 = lv_font_get_line_height(&font_styrene_20);
+    const int16_t lh14 = lv_font_get_line_height(&font_styrene_14);
+    for (int i = 0; i < SESS_HOME_ROWS; i++) {
+        home_dot[i] = lv_obj_create(sess_home);
+        lv_obj_set_size(home_dot[i], 12, 12);
+        lv_obj_set_style_radius(home_dot[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(home_dot[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(home_dot[i], 0, 0);
+        lv_obj_clear_flag(home_dot[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(home_dot[i], LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        home_name[i] = make_home_label(sess_home, &font_styrene_20, COL_TEXT);
+        lv_label_set_long_mode(home_name[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_size(home_name[i], HOME_TEXT_W, lh20);   // one line, else it wraps
+
+        // Recolored: only the state word and the host tag go in, and host tags
+        // are [A-Za-z0-9_-] (daemon-sanitized), so no '#' can break the markup.
+        home_sub[i] = make_home_label(sess_home, &font_styrene_14, COL_DIM);
+        lv_label_set_recolor(home_sub[i], true);
+        lv_label_set_long_mode(home_sub[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_size(home_sub[i], HOME_TEXT_W, lh14);
+    }
+    lv_obj_add_flag(sess_home, LV_OBJ_FLAG_HIDDEN);
+
+    // Tap catcher: transparent, over the home screen and the classic view alike.
+    sess_tap = lv_obj_create(parent);
     lv_obj_set_size(sess_tap, L.scr_w, L.scr_h);
     lv_obj_set_pos(sess_tap, 0, 0);
     lv_obj_set_style_bg_opa(sess_tap, LV_OPA_TRANSP, 0);
@@ -1601,56 +1685,54 @@ static void build_session_overlay(lv_obj_t* usage_parent) {
     lv_obj_clear_flag(sess_tap, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(sess_tap, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(sess_tap, sess_tap_cb, LV_EVENT_CLICKED, NULL);
+}
 
-    sess_overlay = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(sess_overlay, L.scr_w, L.scr_h);
-    lv_obj_set_pos(sess_overlay, 0, 0);
-    lv_obj_set_style_bg_color(sess_overlay, COL_BG, 0);
-    lv_obj_set_style_bg_opa(sess_overlay, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(sess_overlay, 0, 0);
-    lv_obj_set_style_radius(sess_overlay, 0, 0);
-    lv_obj_set_style_pad_all(sess_overlay, 0, 0);
-    lv_obj_clear_flag(sess_overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(sess_overlay, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(sess_overlay, sess_tap_cb, LV_EVENT_CLICKED, NULL);
+static const char* sess_hex(uint8_t s) {   // recolor hex for a state (== THEME_*)
+    return s == SESSION_NEEDS_YOU ? "e8734a" : s == SESSION_YOUR_TURN ? "788c5d"
+         : s == SESSION_WORKING   ? "4cbfb6" : "b0aea5";
+}
 
-    lv_obj_t* hdr = lv_label_create(sess_overlay);
-    lv_label_set_text(hdr, "Claude Code");
-    lv_obj_set_style_text_font(hdr, &font_styrene_20, 0);
-    lv_obj_set_style_text_color(hdr, COL_DIM, 0);
-    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 38);
-
-    const int16_t text_w = SESS_OV_WORD_RIGHT - SESS_OV_WORD_W - SESS_OV_TEXT_X - 6;
-    for (int i = 0; i < SESS_ROUND_ROWS; i++) {
-        sess_ov_dot[i] = lv_obj_create(sess_overlay);
-        lv_obj_set_size(sess_ov_dot[i], 12, 12);
-        lv_obj_set_style_radius(sess_ov_dot[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_opa(sess_ov_dot[i], LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(sess_ov_dot[i], 0, 0);
-        lv_obj_clear_flag(sess_ov_dot[i], LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(sess_ov_dot[i], LV_OBJ_FLAG_EVENT_BUBBLE);
-
-        // Name on top, host in small print under it.
-        sess_ov_name[i] = lv_label_create(sess_overlay);
-        lv_obj_set_style_text_font(sess_ov_name[i], &font_styrene_20, 0);
-        lv_obj_set_style_text_color(sess_ov_name[i], COL_TEXT, 0);
-        lv_label_set_long_mode(sess_ov_name[i], LV_LABEL_LONG_DOT);
-        // Fixed height = one line, or LONG_DOT wraps instead of adding "...".
-        lv_obj_set_size(sess_ov_name[i], text_w, lv_font_get_line_height(&font_styrene_20));
-
-        sess_ov_host[i] = lv_label_create(sess_overlay);
-        lv_obj_set_style_text_font(sess_ov_host[i], &font_styrene_14, 0);
-        lv_obj_set_style_text_color(sess_ov_host[i], COL_DIM, 0);
-        lv_label_set_long_mode(sess_ov_host[i], LV_LABEL_LONG_CLIP);
-        lv_obj_set_size(sess_ov_host[i], text_w, lv_font_get_line_height(&font_styrene_14));
-
-        sess_ov_word[i] = lv_label_create(sess_overlay);
-        lv_obj_set_style_text_font(sess_ov_word[i], &font_styrene_16, 0);
-        lv_obj_set_style_text_align(sess_ov_word[i], LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_width(sess_ov_word[i], SESS_OV_WORD_W);
+// Fill the rows; with six sessions the last row reads "+2 more" so the most
+// urgent four stay visible. Rows are centered for however many are shown.
+static void home_render_rows(void) {
+    const int shown = sess_count > SESS_HOME_ROWS ? SESS_HOME_ROWS : sess_count;
+    const bool more = sess_total > SESS_HOME_ROWS;
+    const int16_t lh20 = lv_font_get_line_height(&font_styrene_20);
+    const int16_t lh14 = lv_font_get_line_height(&font_styrene_14);
+    const int16_t shift = (int16_t)((SESS_HOME_ROWS - shown) * HOME_ROW_H / 2);
+    for (int i = 0; i < SESS_HOME_ROWS; i++) {
+        const int16_t mid = HOME_MID0 + shift + i * HOME_ROW_H;
+        const int16_t top = mid - (lh20 + lh14) / 2;
+        lv_obj_set_pos(home_dot[i], HOME_DOT_X, mid - 6);
+        lv_obj_set_pos(home_name[i], HOME_TEXT_X, top);
+        lv_obj_set_pos(home_sub[i], HOME_TEXT_X, top + lh20);
+        if (i >= shown) {
+            lv_obj_add_flag(home_dot[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(home_name[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(home_sub[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        lv_obj_clear_flag(home_name[i], LV_OBJ_FLAG_HIDDEN);
+        if (more && i == SESS_HOME_ROWS - 1) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "+%d more", sess_total - (SESS_HOME_ROWS - 1));
+            lv_label_set_text(home_name[i], buf);
+            lv_obj_set_style_text_color(home_name[i], COL_DIM, 0);
+            lv_obj_set_pos(home_name[i], HOME_TEXT_X, mid - lh20 / 2);
+            lv_obj_add_flag(home_dot[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(home_sub[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        const SessionData& r = sess_rows[i];
+        char sub[64];
+        snprintf(sub, sizeof(sub), "#%s %s#  %s", sess_hex(r.state), sess_word_text(r.state), r.host);
+        lv_obj_set_style_bg_color(home_dot[i], sess_color(r.state), 0);
+        lv_label_set_text(home_name[i], r.name);
+        lv_obj_set_style_text_color(home_name[i], r.state == SESSION_STALE ? COL_DIM : COL_TEXT, 0);
+        lv_label_set_text(home_sub[i], sub);
+        lv_obj_clear_flag(home_dot[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(home_sub[i], LV_OBJ_FLAG_HIDDEN);
     }
-    sess_overlay_layout(SESS_ROUND_ROWS);
-    lv_obj_add_flag(sess_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void sess_render_rows(lv_obj_t* const* dot, lv_obj_t* const* host,
@@ -1658,10 +1740,7 @@ static void sess_render_rows(lv_obj_t* const* dot, lv_obj_t* const* host,
 
 static void sess_render(void) {
     if (sess_panel)   sess_render_rows(sess_dot, sess_host, sess_name, sess_word, MAX_SESSIONS);
-    if (sess_overlay) {
-        sess_render_rows(sess_ov_dot, sess_ov_host, sess_ov_name, sess_ov_word, SESS_ROUND_ROWS);
-        sess_overlay_layout(sess_count);
-    }
+    if (sess_home) home_render_rows();
 }
 
 static void sess_render_rows(lv_obj_t* const* sess_dot, lv_obj_t* const* sess_host,
@@ -1706,9 +1785,11 @@ static void sess_track_needs(void) {
     if (n == 0)  sess_cue_on = false;
 }
 
+static void update_view_state(void);
+
 // Called every loop from ui_tick_anim(), after update_view_state().
 static void sessions_tick(uint32_t now) {
-    if (!sess_panel && !sess_overlay) return;
+    if (!sess_panel && !sess_home) return;
     if (sess_dirty) {
         sess_dirty = false;
         sess_render();
@@ -1717,11 +1798,30 @@ static void sessions_tick(uint32_t now) {
 
     const bool live = sess_received && (now - sess_last_ms) < SESS_LIVE_MS;
     const bool show = live && sess_count > 0 && view_state != 0;
-    if (show != sess_showing && sess_overlay) {
-        // Round: the badge lives in the status line (ui_tick_anim); the list
-        // only exists while it's open, so close it when there's nothing to list.
+    if (sess_home) {
+        // Round: the home screen replaces the usage gauges while there are
+        // sessions, except during a tap-triggered peek at the classic view.
         sess_showing = show;
-        if (!show) sess_overlay_set(false);
+        if (sess_peek_ms && (!show || now - sess_peek_ms >= SESS_PEEK_MS)) sess_peek_ms = 0;
+        const bool home = show && !sess_peek_ms;
+        if (home != sess_home_on) {
+            sess_home_on = home;
+            if (home) {
+                lv_obj_clear_flag(sess_home, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);   // the rows say it all
+                home_fresh = -1;
+            } else {
+                lv_obj_add_flag(sess_home, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
+            }
+            view_state = -1;          // let update_view_state() re-apply the groups
+            update_view_state();
+        }
+        const int fresh = (view_state == 2) ? 1 : 0;
+        if (home && fresh != home_fresh) {
+            home_fresh = fresh;
+            home_draw_usage(fresh);
+        }
     } else if (show != sess_showing) {
         sess_showing = show;
         if (show) lv_obj_clear_flag(sess_panel, LV_OBJ_FLAG_HIDDEN);
@@ -1738,7 +1838,6 @@ static void sessions_tick(uint32_t now) {
         ticker_dirty = true;
     }
 
-    if (sess_overlay_ms && now - sess_overlay_ms >= SESS_OVERLAY_MS) sess_overlay_set(false);
 
     static int last_phase = -1;
     if (sess_cue_on && show) {
@@ -1980,7 +2079,7 @@ static void init_usage_screen(lv_obj_t* scr) {
     // Same z-order reasoning as the control bar: created after pair/idle so it
     // isn't buried under them (it must be tappable on the idle screen too).
     if (L.sess_h > 0) build_session_panel(usage_container);
-    if (L.sess_round) build_session_overlay(usage_container);
+    if (L.sess_round) build_session_home(usage_container);
     if (L.sess_h > 0 || L.sess_round) build_session_cue();
 
     // Status line — always visible on the usage view. Driven by ui_tick_anim().
@@ -2050,9 +2149,8 @@ void ui_init(void) {
         if (L.minimal_header) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Session list overlay, then its attention cue, above everything built here.
-    if (sess_overlay) lv_obj_move_foreground(sess_overlay);
-    if (sess_cue)     lv_obj_move_foreground(sess_cue);
+    // The session attention cue goes above everything built here.
+    if (sess_cue) lv_obj_move_foreground(sess_cue);
 }
 
 void ui_update_quote_of_day(const char* text, const char* author) {
@@ -2061,11 +2159,12 @@ void ui_update_quote_of_day(const char* text, const char* author) {
     ticker_dirty = true;   // refresh the visible card in place if it's the quote
 }
 
-void ui_update_sessions(const SessionData* sessions, int count) {
+void ui_update_sessions(const SessionData* sessions, int count, int total) {
     if (count < 0) count = 0;
     if (count > MAX_SESSIONS) count = MAX_SESSIONS;
     for (int i = 0; i < count; i++) sess_rows[i] = sessions[i];
     sess_count = count;
+    sess_total = total > count ? total : count;
     sess_last_ms = lv_tick_get();
     sess_received = true;
     sess_dirty = true;   // drawn by the session list (task 6 of add-session-status)
@@ -2075,6 +2174,7 @@ void ui_update(const UsageData* data) {
     if (!data->valid) return;
     last_data_ms = lv_tick_get();   // a valid usage update just landed → dot goes green
     data_received = true;
+    if (sess_home) home_set_usage(data);
 
     if (data->clock_epoch > 0) {    // daemon supplied wall-clock time → drive the clock
         clock_base_epoch = data->clock_epoch;
@@ -2190,6 +2290,12 @@ static void update_view_state(void) {
         if (v == 0) lv_obj_add_flag(control_bar, LV_OBJ_FLAG_HIDDEN);
         else        lv_obj_clear_flag(control_bar, LV_OBJ_FLAG_HIDDEN);
     }
+    // Round session home screen (sessions_tick) stands in for both the live
+    // gauges and the idle creature while it's up.
+    if (sess_home_on) {
+        lv_obj_add_flag(usage_group, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(idle_group, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 // "<glyph> #e8734a 1 needs you# #b0aea5 +2#" — LVGL recolor markup. Only counts
@@ -2205,7 +2311,7 @@ static void sess_badge_text(char* buf, size_t len, const char* glyph) {
     char what[24];
     if (top == SESSION_NEEDS_YOU) snprintf(what, sizeof(what), "%d need%s you", n[top], n[top] == 1 ? "s" : "");
     else                          snprintf(what, sizeof(what), "%d %s", n[top], sess_word_text(top));
-    const int others = sess_count - n[top];
+    const int others = sess_total - n[top];
     if (others > 0) snprintf(buf, len, "%s #%s %s# #b0aea5 +%d#", glyph, hex, what, others);
     else            snprintf(buf, len, "%s #%s %s#", glyph, hex, what);
 }

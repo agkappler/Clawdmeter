@@ -11,10 +11,13 @@ remotes, all on one screen. The machine each one runs on is shown next to its
 name.
 
 > **Boards:**
-> - **Round LCD-1.85B:** the status line in the middle of the ring becomes a
->   badge, such as "1 needs you +3", and the attention pulse is a ring around
->   the bezel. Tap the screen to open the full list; tap again, or wait 10
->   seconds, to close it.
+> - **Round LCD-1.85B:** while any session exists, the session screen becomes
+>   the main view. A thin ring shows usage (Current on top, Weekly on the
+>   bottom), with each percentage and reset time just inside it, and up to 5
+>   sessions in the middle ("+N more" when there are more). Tap to see the
+>   classic usage screen for 10 seconds; its center line then reads, for
+>   example, "1 needs you +3". With no sessions, the classic screen is the
+>   default as before. The attention pulse is a ring around the bezel.
 > - **ESP32-P4 Touch LCD-5:** the list fills the band between the usage panels
 >   and the media buttons.
 > - Other boards ignore the data for now.

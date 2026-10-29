@@ -54,6 +54,8 @@
 - [x] 6b.2 Badge in the ring's center status line (most urgent state's count in its color, plus `+N` others), circular bezel pulse, tap-to-open full-screen list (6 rows centered, auto-close after 10 s).
 - [x] 6b.3 Verified on hardware by screenshot (badge, both pulse phases, 4- and 6-row lists, long-name truncation) using a temporary auto-open build, then the normal build.
 - [x] 6b.4 A real finger tap opens and closes the list, and acknowledges the pulse (confirmed by the user on hardware, 2026-10-28).
+- [x] 6b.5 User request: make the session screen the default on the round board. Replaced the tap-to-open list with a home screen (thin ring with Current/Weekly percentages top and bottom, 5 rows in the middle, "+N more" from a new `"sn"` total sent by the daemon); a tap peeks at the classic view for 10 s; no sessions means the classic view as before. Verified by screenshot for 0, 4, 5 and 13 sessions.
+- [ ] 6b.6 A real finger tap on the home screen shows the classic view, and it returns after 10 s or another tap.
 
 ## 7. End-to-end and docs
 

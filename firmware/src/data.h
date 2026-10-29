@@ -64,6 +64,7 @@ struct UsageData {
     // payload without one, so a usage write can't wipe the list.
     SessionData sessions[MAX_SESSIONS];
     int  session_count;
+    int  session_total;      // all live sessions, >= session_count ("sn"; = count when absent)
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
 };

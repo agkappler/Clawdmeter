@@ -84,7 +84,7 @@ With `networkingMode=mirrored` in `.wslconfig`, WSL's localhost is the Windows h
 ```json
 {"ss":[{"h":"wsl","n":"api","s":1},{"h":"win","n":"Clawdmeter","s":0}]}
 ```
-`s` is 0 working, 1 needs you, 2 your turn, 3 stale. `h` is at most 8 characters and `n` at most 20, both ASCII-folded with `_asciify` (bundled fonts cover only 0x20–0x7E). A count of extra sessions beyond 6 is left out of v1.
+`s` is 0 working, 1 needs you, 2 your turn, 3 stale. `h` is at most 8 characters and `n` at most 20, both ASCII-folded with `_asciify` (bundled fonts cover only 0x20–0x7E). `"sn"` carries the real total only when more sessions exist than rows sent (or fit), so the round board's last row can say "+9 more" rather than guess from 6 rows.
 
 **When it's sent:**
 - As its own write, and **only when the serialized `(h, n, s)` list differs from the last one sent**, debounced 250 ms. A `PreToolUse`/`PostToolUse` pair on a session that's already working changes nothing on the wire.

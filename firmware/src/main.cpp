@@ -111,7 +111,7 @@ struct parse_parts_t {
 
 // "ss":[{"h":"wsl","n":"api","s":1}, ...]. An empty array clears the list.
 // Returns false when the write has no "ss" array at all ("no news").
-static bool parse_sessions(JsonVariantConst ss, UsageData* out) {
+static bool parse_sessions(JsonVariantConst ss, JsonVariantConst ss_total, UsageData* out) {
     if (!ss.is<JsonArrayConst>()) return false;
     out->session_count = 0;
     for (JsonObjectConst e : ss.as<JsonArrayConst>()) {
@@ -124,6 +124,9 @@ static bool parse_sessions(JsonVariantConst ss, UsageData* out) {
         dst->state = (uint8_t)state;
         if (dst->name[0]) out->session_count++;
     }
+    // "sn": the real total when the daemon had more sessions than it sent.
+    int total = ss_total.isNull() ? out->session_count : (ss_total | 0);
+    out->session_total = total > out->session_count ? total : out->session_count;
     return true;
 }
 
@@ -140,7 +143,7 @@ static parse_result_t parse_json(const char* json, UsageData* out, parse_parts_t
     // Sessions can ride on any write (the daemon sends them on their own) and
     // are independent of usage: they're accepted even before the first usage
     // payload, and a usage payload without "ss" leaves them alone.
-    parts->ss = parse_sessions(doc["ss"], out);
+    parts->ss = parse_sessions(doc["ss"], doc["sn"], out);
 
     // Supplementary write: no usage fields. Merge whatever it carries and leave
     // every usage field exactly as the last full payload left it.
@@ -477,7 +480,7 @@ void loop() {
                 // re-anchor the clock to the last usage payload's epoch.
                 ui_update_quote_of_day(usage.qod_text, usage.qod_author);
             }
-            if (parts.ss) ui_update_sessions(usage.sessions, usage.session_count);
+            if (parts.ss) ui_update_sessions(usage.sessions, usage.session_count, usage.session_total);
             ble_send_ack();
         }
     }
