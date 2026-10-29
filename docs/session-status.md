@@ -2,8 +2,12 @@
 
 Shows your Claude Code sessions on the device: which are **working**, which
 **need you** (a permission prompt or a question is waiting), which are waiting
-for your next prompt (**your turn**), and which have gone quiet (**stale**).
-Colors: **red** needs you, **gold** your turn, **teal** working, gray stale.
+for your next prompt (**your turn**), which have gone quiet (**stale**), and
+which you've set aside with `/park` (**parked**). Colors: **red** needs you,
+**gold** your turn, **teal** working, gray stale, dark gray parked.
+A session that just finished its turn also shows as **needs you** for its first
+5 minutes, then drops to your turn: a finished turn often means there's
+something for you to look at.
 When a session newly needs you, the screen border blinks red until you tap
 the list or answer the prompt.
 
@@ -56,6 +60,7 @@ Add this to the daemon config, then restart the daemon:
 ```ini
 sessions = on
 # sessions_port = 47123   # only if something else uses this port
+# your_turn_alert = 5     # minutes a finished turn shows as "needs you"; 0 turns it off
 ```
 
 On start the daemon logs `Sessions: listening on 127.0.0.1:47123` and creates
@@ -166,10 +171,14 @@ the row: the session's next event adds it back, and that includes Claude Code's
 idle reminder about a minute after a turn ends.
 
 To step away from a live session, type `/park` in it instead. The installer
-adds this skill alongside the hooks on every machine. The session's row stays
-hidden until your next prompt there, and the events in between (the `/park`
-turn itself, the idle reminder) are ignored. It runs one short command, so it
-costs one quick turn.
+adds this skill alongside the hooks on every machine. The session's row turns
+dark gray, reads "parked" and moves below the active sessions (only stale
+ones sort after it), so it drops off early when there are more sessions than
+fit. It stays that way
+until your next prompt there; the events in between (the `/park` turn itself,
+the idle reminder) are ignored. It runs one short command, so it costs one
+quick turn. Firmware from before 2026-10-29 doesn't know this state and leaves
+parked rows out.
 
 ## Troubleshooting
 
@@ -215,7 +224,7 @@ installed into the config dir the app uses.
 - Only one daemon can own the device's Bluetooth link. Point every machine's
   hooks at that daemon, using SSH or WSL as above; sessions sent to a second
   daemon never reach the device.
-- The device shows up to 6 sessions, the ones that need you first.
+- The device shows up to 6 sessions, the ones that need you first, then your turn, working, parked and stale.
 - The session list on/off setting and the port are read once, when the daemon starts.
 
 ## Privacy and security

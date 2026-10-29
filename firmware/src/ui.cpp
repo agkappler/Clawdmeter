@@ -402,6 +402,7 @@ static void compute_layout(const BoardCaps& c) {
 #define COL_GOLD      THEME_GOLD
 #define COL_RED       THEME_RED
 #define COL_BAR_BG    THEME_BAR_BG
+#define COL_FAINT     THEME_FAINT
 
 // ---- Usage screen widgets (the only view) ----
 static lv_obj_t* usage_container;
@@ -1443,6 +1444,7 @@ static lv_color_t sess_color(uint8_t s) {
         case SESSION_NEEDS_YOU: return COL_RED;   // red, not the accent amber: it must stand out
         case SESSION_YOUR_TURN: return COL_GOLD;    // warning level, below red
         case SESSION_WORKING:   return COL_TEAL;
+        case SESSION_PARKED:    return COL_FAINT;
         default:                return COL_DIM;
     }
 }
@@ -1452,6 +1454,7 @@ static const char* sess_word_text(uint8_t s) {
         case SESSION_NEEDS_YOU: return "needs you";
         case SESSION_YOUR_TURN: return "your turn";
         case SESSION_WORKING:   return "working";
+        case SESSION_PARKED:    return "parked";
         default:                return "stale";
     }
 }
@@ -1690,7 +1693,7 @@ static void build_session_home(lv_obj_t* parent) {
 
 static const char* sess_hex(uint8_t s) {   // recolor hex for a state (== THEME_*)
     return s == SESSION_NEEDS_YOU ? "c0392b" : s == SESSION_YOUR_TURN ? "e3b341"
-         : s == SESSION_WORKING   ? "4cbfb6" : "b0aea5";
+         : s == SESSION_WORKING   ? "4cbfb6" : s == SESSION_PARKED ? "6b6a65" : "b0aea5";
 }
 
 // Fill the rows; with six sessions the last row reads "+2 more" so the most
@@ -1729,7 +1732,7 @@ static void home_render_rows(void) {
         snprintf(sub, sizeof(sub), "#%s %s#  %s", sess_hex(r.state), sess_word_text(r.state), r.host);
         lv_obj_set_style_bg_color(home_dot[i], sess_color(r.state), 0);
         lv_label_set_text(home_name[i], r.name);
-        lv_obj_set_style_text_color(home_name[i], r.state == SESSION_STALE ? COL_DIM : COL_TEXT, 0);
+        lv_obj_set_style_text_color(home_name[i], r.state >= SESSION_STALE ? COL_DIM : COL_TEXT, 0);
         lv_label_set_text(home_sub[i], sub);
         lv_obj_clear_flag(home_dot[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(home_sub[i], LV_OBJ_FLAG_HIDDEN);
@@ -1758,7 +1761,7 @@ static void sess_render_rows(lv_obj_t* const* sess_dot, lv_obj_t* const* sess_ho
         lv_label_set_text(sess_host[i], r.host);
         lv_label_set_text(sess_name[i], r.name);
         lv_obj_set_style_text_color(sess_name[i],
-            r.state == SESSION_STALE ? COL_DIM : COL_TEXT, 0);
+            r.state >= SESSION_STALE ? COL_DIM : COL_TEXT, 0);
         lv_label_set_text(sess_word[i], sess_word_text(r.state));
         lv_obj_set_style_text_color(sess_word[i], c, 0);
         for (lv_obj_t* p : parts) lv_obj_clear_flag(p, LV_OBJ_FLAG_HIDDEN);
@@ -2302,9 +2305,10 @@ static void update_view_state(void) {
 // "<glyph> #e8734a 1 needs you# #b0aea5 +2#" — LVGL recolor markup. Only counts
 // go into it, never session names, so a '#' in a name can't break the markup.
 static void sess_badge_text(char* buf, size_t len, const char* glyph) {
-    int n[4] = {0, 0, 0, 0};
-    for (int i = 0; i < sess_count; i++) if (sess_rows[i].state <= SESSION_STALE) n[sess_rows[i].state]++;
-    static const uint8_t order[] = { SESSION_NEEDS_YOU, SESSION_YOUR_TURN, SESSION_WORKING, SESSION_STALE };
+    int n[5] = {0, 0, 0, 0, 0};
+    for (int i = 0; i < sess_count; i++) if (sess_rows[i].state <= SESSION_PARKED) n[sess_rows[i].state]++;
+    static const uint8_t order[] = { SESSION_NEEDS_YOU, SESSION_YOUR_TURN, SESSION_WORKING, SESSION_PARKED,
+                                     SESSION_STALE };
     uint8_t top = SESSION_STALE;
     for (uint8_t s : order) if (n[s] > 0) { top = s; break; }
     const char* hex = sess_hex(top);

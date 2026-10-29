@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from daemon import session_status as ss
-from daemon.session_status import NEEDS_YOU, STALE, WORKING, YOUR_TURN
+from daemon.session_status import NEEDS_YOU, PARKED, STALE, WORKING, YOUR_TURN
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hooks"
 
@@ -33,9 +33,9 @@ class Clock:
         return self.t
 
 
-def tracker(tmp_path=None, clock=None):
+def tracker(tmp_path=None, clock=None, alert=0):
     return ss.SessionTracker(tmp_path / "sessions.json" if tmp_path else None,
-                             log=lambda m: None, clock=clock or Clock())
+                             log=lambda m: None, clock=clock or Clock(), your_turn_alert=alert)
 
 
 def states(t):
@@ -187,6 +187,67 @@ def test_your_turn_does_not_go_stale():
     assert states(t) == [YOUR_TURN]
 
 
+def test_finished_turn_needs_you_for_the_alert_window():
+    c = Clock()
+    t = tracker(clock=c, alert=300)
+    t.handle_event("mac", fx("UserPromptSubmit"))
+    t.handle_event("mac", fx("Stop"))
+    assert states(t) == [NEEDS_YOU]
+    c.t += 60
+    t.handle_event("mac", fx("Notification-idle_prompt"))   # doesn't restart the window
+    assert states(t) == [NEEDS_YOU]
+    c.t += 241
+    assert states(t) == [YOUR_TURN]
+
+
+def test_alert_window_ends_on_the_next_prompt_and_skips_esc():
+    c = Clock()
+    t = tracker(clock=c, alert=300)
+    t.handle_event("mac", fx("Stop"))
+    t.handle_event("mac", fx("UserPromptSubmit"))
+    assert states(t) == [WORKING]
+    c.t += 10
+    t.handle_event("mac", fx("PostToolUseFailure", is_interrupt=True))
+    assert states(t) == [YOUR_TURN]
+
+
+def test_alert_window_sorts_with_needs_you_and_survives_restart(tmp_path):
+    c = Clock()
+    t = tracker(tmp_path, clock=c, alert=300)
+    t.handle_event("mac", fx("PermissionRequest", session_id="a", cwd="/p/a"))
+    c.t += 1
+    t.handle_event("mac", fx("PreToolUse", session_id="b", cwd="/p/b"))
+    t.handle_event("mac", fx("Stop", session_id="b", cwd="/p/b"))
+    t2 = tracker(tmp_path, clock=c, alert=300)
+    t2.load()
+    assert states(t2) == [NEEDS_YOU, NEEDS_YOU]
+    c.t += 301
+    assert states(t2) == [NEEDS_YOU, YOUR_TURN]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, ss.YOUR_TURN_ALERT), ("10", 600), ("0", 0), ("2.5", 150), ("soon", ss.YOUR_TURN_ALERT)])
+def test_your_turn_alert_config(tmp_path, raw, expected):
+    cfg = tmp_path / "config"
+    lines = ["sessions = on"] + ([f"your_turn_alert = {raw}  # minutes"] if raw else [])
+    cfg.write_text("\n".join(lines) + "\n")
+    assert ss.your_turn_alert_from_config(cfg, log=lambda m: None) == expected
+
+
+def test_parked_sorts_after_working_and_before_stale():
+    c = Clock()
+    t = tracker(clock=c)
+    t.handle_event("mac", fx("Stop", session_id="p", cwd="/p/parked"))
+    t.handle_event("mac", {"hook_event_name": ss.PARK_EVENT, "session_id": "p"})
+    for i in range(7):
+        c.t += 1
+        t.handle_event("mac", fx("PreToolUse", session_id=str(i), cwd=f"/p/s{i}"))
+    c.t += ss.STALE_WORKING + 1
+    t.handle_event("mac", fx("PreToolUse", session_id="0", cwd="/p/s0"))
+    assert [e.sid for e, _, _ in t.listing()][:3] == ["0", "p", "1"]
+    assert states(t) == [WORKING, PARKED] + [STALE] * 4 and t.total() == 8
+
+
 def test_at_most_six_rows():
     t = tracker()
     for i in range(10):
@@ -205,14 +266,14 @@ def test_listing_covers_every_session_in_row_order():
     assert listing[0][0].sid == "7"
 
 
-def test_park_hides_until_the_next_prompt():
-    t = tracker()
+def test_park_holds_until_the_next_prompt():
+    t = tracker(alert=300)
     t.handle_event("mini", fx("UserPromptSubmit", session_id="p"))
     t.handle_event("mini", fx("PreToolUse", session_id="p"))
     t.handle_event("mini", {"hook_event_name": ss.PARK_EVENT, "session_id": "p"})
     for name in ("PostToolUse", "Stop", "Notification-idle_prompt"):
         t.handle_event("mini", fx(name, session_id="p"))
-    assert t.rows() == [] and t.total() == 0
+    assert states(t) == [PARKED] and t.total() == 1
     t.handle_event("mini", fx("UserPromptSubmit", session_id="p"))
     assert states(t) == [WORKING]
 
@@ -224,7 +285,7 @@ def test_parked_session_still_ends_and_survives_restart(tmp_path):
     t2 = tracker(tmp_path)
     t2.load()
     t2.handle_event("mini", fx("Stop", session_id="p"))
-    assert t2.rows() == []
+    assert states(t2) == [PARKED]
     t2.handle_event("mini", fx("SessionEnd", session_id="p"))
     t2.handle_event("mini", fx("Stop", session_id="p"))
     assert states(t2) == [YOUR_TURN]

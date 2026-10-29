@@ -5,7 +5,7 @@ The P4 board has no screenshot and no serial input, so this is how to put
 known session states on the device for UI work without running real sessions.
 Events come from daemon/tests/fixtures/hooks/ (real, scrubbed captures).
 
-  python3 tools/post_fixture_hooks.py demo      # 5 sessions across hosts, one blocked
+  python3 tools/post_fixture_hooks.py demo      # 5 sessions across hosts, one blocked, one parked
   python3 tools/post_fixture_hooks.py many      # 8 more (round board: 4 rows + "+N more")
   python3 tools/post_fixture_hooks.py replay    # the captured interactive session, in real time
   python3 tools/post_fixture_hooks.py clear     # end every session this tool created
@@ -24,6 +24,7 @@ import urllib.request
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent.parent / "daemon" / "tests" / "fixtures" / "hooks"
+PARK_EVENT = "ClawdmeterPark"   # what the /park skill sends; no capture, since Claude Code never does
 PREFIX = "fixture-"   # session ids this tool creates, so `clear` only ends its own
 
 
@@ -36,6 +37,8 @@ def default_token_file() -> Path:
 
 
 def fixture(name: str, sid: str, cwd: str) -> dict:
+    if name == PARK_EVENT:
+        return {"hook_event_name": PARK_EVENT, "session_id": PREFIX + sid}
     d = json.loads((FIXTURES / f"{name}.json").read_text())
     d.update(session_id=PREFIX + sid, cwd=cwd)
     return d
@@ -66,7 +69,7 @@ DEMO = [  # host, sid, folder, events in order (last one decides the state)
     ("wsl", "b", "/home/user/api", ["UserPromptSubmit", "PreToolUse", "PermissionRequest"]),
     ("devbox", "c", "/srv/infra", ["UserPromptSubmit", "Stop"]),
     ("win", "d", "C:\\src\\Clawdmeter", ["UserPromptSubmit", "PreToolUse"]),
-    ("mac", "e", "/srv/billing-service", ["UserPromptSubmit", "PreToolUse"]),
+    ("mac", "e", "/srv/billing-service", ["UserPromptSubmit", "Stop", PARK_EVENT]),
 ]
 
 

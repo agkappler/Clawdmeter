@@ -183,7 +183,7 @@ def test_park_skill_parks_this_session_through_the_installed_hook(cfg):
 
     t, out = asyncio.run(go())
     assert out.returncode == 0, out.stderr
-    assert t.rows() == []
+    assert [r["s"] for r in t.rows()] == [ss.PARKED]
     skill = (inst.park_skill_dir(cfg) / "SKILL.md").read_text()
     assert "${CLAUDE_SESSION_ID}" in skill and "disable-model-invocation: true" in skill
 

@@ -3,7 +3,7 @@
 Claude Code's built-in `http` hooks POST each lifecycle event (prompt submitted,
 tool about to run, permission needed, turn finished, session ended, ...) to a
 small receiver here. This module turns those events into a table of sessions —
-working / needs you / your turn / stale — and builds the compact `"ss"` payload
+working / needs you / your turn / stale / parked — and builds the compact `"ss"` payload
 the daemons send to the firmware as its own BLE write.
 
 It is shared by the macOS/Linux and Windows daemons and has no BLE or platform
@@ -36,6 +36,7 @@ NAME_MAX = 20             # chars, matches SessionData.name on the device
 DEBOUNCE = 0.25           # s: coalesce bursts (PreToolUse + PermissionRequest)
 HEARTBEAT = 60            # s: resend an unchanged list so the device knows we're alive
 STALE_WORKING = 30 * 60   # s: "working" with no event this long reads as stale
+YOUR_TURN_ALERT = 5 * 60  # s: a finished turn reads as "needs you" this long (config: your_turn_alert)
 DROP_AFTER = 12 * 3600    # s: forget a session with no event this long
 PERSIST_EVERY = 60        # s: also persist timestamp-only changes this often
 MAX_BODY = 64 * 1024      # bytes: hook bodies include tool output; cap it
@@ -43,8 +44,8 @@ READ_TIMEOUT = 5          # s: per request
 TOKEN_HEADER = "x-clawdmeter-token"
 
 # Wire values for "s". Order of the sort is by PRIORITY, not by these numbers.
-WORKING, NEEDS_YOU, YOUR_TURN, STALE = 0, 1, 2, 3
-PRIORITY = {NEEDS_YOU: 0, YOUR_TURN: 1, WORKING: 2, STALE: 3}
+WORKING, NEEDS_YOU, YOUR_TURN, STALE, PARKED = 0, 1, 2, 3, 4
+PRIORITY = {NEEDS_YOU: 0, YOUR_TURN: 1, WORKING: 2, PARKED: 3, STALE: 4}
 REMOVE = -1
 PARK = -2
 PARK_EVENT = "ClawdmeterPark"   # sent by the /park skill, not by Claude Code
@@ -130,15 +131,18 @@ class Entry:
     state: int
     first_seen: float   # wall clock, so it survives a restart
     updated: float
-    parked: bool = False   # hidden until the next UserPromptSubmit
+    parked: bool = False   # shown as PARKED until the next UserPromptSubmit
+    turn_ended: float = 0.0   # last Stop/StopFailure; the idle reminder doesn't move it
 
 
 class SessionTracker:
     """The session table, its persistence, and the "ss" payload."""
 
     def __init__(self, persist_path: Path | None = None, log: Log = print,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time,
+                 your_turn_alert: float = YOUR_TURN_ALERT) -> None:
         self._entries: dict[tuple[str, str], Entry] = {}
+        self._your_turn_alert = your_turn_alert
         self._path = persist_path
         self._log = log
         self._clock = clock
@@ -179,6 +183,10 @@ class SessionTracker:
             entry.parked = False
             entry.state = state
             entry.updated = now
+            if fields["event"] in ("Stop", "StopFailure"):
+                entry.turn_ended = now
+            elif state != YOUR_TURN:
+                entry.turn_ended = 0.0
             if fields["cwd_name"]:
                 entry.cwd_name = fields["cwd_name"]
             if fields["title"]:
@@ -208,20 +216,24 @@ class SessionTracker:
                 for e, label, state in self.listing()[:MAX_SESSIONS]]
 
     def listing(self) -> list[tuple[Entry, str, int]]:
-        """Every unparked session as (entry, label, shown state), in device order."""
+        """Every session as (entry, label, shown state), in device order."""
         now = self._clock()
         self._prune(now)
 
         def shown_state(e: Entry) -> int:
+            if e.parked:
+                return PARKED
             if e.state == WORKING and now - e.updated > STALE_WORKING:
                 return STALE
+            if e.state == YOUR_TURN and now - e.turn_ended < self._your_turn_alert:
+                return NEEDS_YOU
             return e.state
 
         # Labels are de-duplicated per host in first-seen order, so "api" and
         # "api#2" keep their names as other sessions come and go.
         labels: dict[tuple[str, str], str] = {}
         counts: dict[tuple[str, str], int] = {}
-        shown = [e for e in self._entries.values() if not e.parked]
+        shown = list(self._entries.values())
         for e in sorted(shown, key=lambda e: e.first_seen):
             base = ascii_fold(e.title or e.cwd_name or "session", NAME_MAX) or "session"
             n = counts.get((e.host, base), 0) + 1
@@ -238,7 +250,7 @@ class SessionTracker:
     def total(self) -> int:
         """Live sessions, including any beyond the MAX_SESSIONS sent."""
         self._prune(self._clock())
-        return sum(not e.parked for e in self._entries.values())
+        return len(self._entries)
 
     def payload(self, limit: int) -> bytes:
         """The "ss" write, dropping whole rows from the end until it fits.
@@ -274,7 +286,7 @@ class SessionTracker:
             if wait > 0:
                 await asyncio.sleep(wait)
             self.changed.clear()
-        # Recompute even without an event: "working" ages into "stale" on its own.
+        # Recompute even without an event: states age on their own.
         self._after_mutation(self._clock())
         self.changed.clear()
         data = self.payload(limit)
@@ -435,6 +447,18 @@ def read_config_value(config_file: Path, key: str) -> str | None:
     return None
 
 
+def your_turn_alert_from_config(config_file: Path, log: Log = print) -> float:
+    """`your_turn_alert` in minutes (0 turns it off), as seconds."""
+    raw = read_config_value(config_file, "your_turn_alert")
+    if raw is None:
+        return YOUR_TURN_ALERT
+    try:
+        return max(0.0, float(raw)) * 60
+    except ValueError:
+        log(f"Sessions: bad your_turn_alert; using {YOUR_TURN_ALERT // 60} minutes")
+        return YOUR_TURN_ALERT
+
+
 async def start_from_config(config_file: Path, log: Log = print) -> SessionTracker | None:
     """Start session status if `sessions = on`. Returns the tracker, or None.
 
@@ -449,7 +473,8 @@ async def start_from_config(config_file: Path, log: Log = print) -> SessionTrack
     except ValueError:
         log(f"Sessions: bad sessions_port; using {DEFAULT_PORT}")
         port = DEFAULT_PORT
-    tracker = SessionTracker(config_file.parent / "sessions.json", log)
+    tracker = SessionTracker(config_file.parent / "sessions.json", log,
+                             your_turn_alert=your_turn_alert_from_config(config_file, log))
     tracker.load()
     token = load_or_create_token(config_file.parent / "sessions-token")
     receiver = Receiver(tracker, token, log)

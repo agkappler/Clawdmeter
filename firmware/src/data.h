@@ -29,6 +29,7 @@ enum session_state_t : uint8_t {
     SESSION_NEEDS_YOU = 1,
     SESSION_YOUR_TURN = 2,
     SESSION_STALE = 3,
+    SESSION_PARKED = 4,   // /park: kept in view, listed after working and before stale
 };
 
 struct SessionData {

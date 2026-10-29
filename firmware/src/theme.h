@@ -27,3 +27,6 @@
 // KEEP IN SYNC with the "e3b341" recolor hex in ui.cpp's sess_hex().
 #define THEME_GOLD     lv_color_hex(0xe3b341)
 #define THEME_BAR_BG   lv_color_hex(0x2a2a28)   // unfilled bar track
+// Below THEME_DIM, for parked sessions (stale uses DIM). KEEP IN SYNC with the
+// "6b6a65" recolor hex in ui.cpp's sess_hex().
+#define THEME_FAINT    lv_color_hex(0x6b6a65)

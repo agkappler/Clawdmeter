@@ -25,11 +25,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from daemon.session_status import (  # noqa: E402
-    DEFAULT_PORT, NEEDS_YOU, STALE, TOKEN_HEADER, WORKING, YOUR_TURN,
-    SessionTracker, read_config_value,
+    DEFAULT_PORT, NEEDS_YOU, PARKED, STALE, TOKEN_HEADER, WORKING, YOUR_TURN,
+    SessionTracker, read_config_value, your_turn_alert_from_config,
 )
 
-STATE_NAMES = {WORKING: "working", NEEDS_YOU: "needs you", YOUR_TURN: "your turn", STALE: "stale"}
+STATE_NAMES = {WORKING: "working", NEEDS_YOU: "needs you", YOUR_TURN: "your turn", STALE: "stale",
+               PARKED: "parked"}
 IDLE_PROMPT_DELAY = 70   # s: Claude Code's idle_prompt lands ~60 s after Stop and re-adds the row
 
 
@@ -40,7 +41,9 @@ def config_dir() -> Path:
 
 
 def load_sessions(base: Path) -> list:
-    tracker = SessionTracker(base / "sessions.json", log=lambda m: None)
+    quiet = lambda m: None
+    tracker = SessionTracker(base / "sessions.json", log=quiet,
+                             your_turn_alert=your_turn_alert_from_config(base / "config", quiet))
     tracker.load()
     return tracker.listing()
 
@@ -122,7 +125,7 @@ def main() -> None:
     for e, label, state in targets:
         end_session(port, token, e.host, e.sid)
         print(f"Ended {e.host} {label} ({e.sid[:8]})")
-        if state == YOUR_TURN and now - e.updated < IDLE_PROMPT_DELAY:
+        if e.state == YOUR_TURN and now - e.updated < IDLE_PROMPT_DELAY:
             print("  It finished under a minute ago, so Claude Code's idle reminder may bring it back; "
                   "end it again after that.")
 

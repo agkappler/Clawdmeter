@@ -117,7 +117,7 @@ static bool parse_sessions(JsonVariantConst ss, JsonVariantConst ss_total, Usage
     for (JsonObjectConst e : ss.as<JsonArrayConst>()) {
         if (out->session_count >= MAX_SESSIONS) break;
         int state = e["s"] | -1;
-        if (state < SESSION_WORKING || state > SESSION_STALE) continue;
+        if (state < SESSION_WORKING || state > SESSION_PARKED) continue;
         SessionData* dst = &out->sessions[out->session_count];
         strlcpy(dst->host, e["h"] | "", sizeof(dst->host));
         strlcpy(dst->name, e["n"] | "", sizeof(dst->name));
