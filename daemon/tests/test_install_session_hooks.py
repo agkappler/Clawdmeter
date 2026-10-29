@@ -142,15 +142,6 @@ def test_remote_prints_forward_line(cfg, capsys):
     assert "RemoteForward 47200 127.0.0.1:47200" in capsys.readouterr().out
 
 
-def test_daemon_name_replaces_loopback_entries(cfg, capsys):
-    run(cfg, "--host", "mini", "--token", "t")
-    run(cfg, "--host", "mini", "--token", "t", "--daemon", "desk.tail.ts.net", "--remote")
-    found = ours(settings(cfg))
-    assert len(found) == len(inst.EVENTS)
-    assert {h["url"] for _, h in found} == {"http://desk.tail.ts.net:47123/hook/mini"}
-    assert "RemoteForward" not in capsys.readouterr().out
-
-
 def test_wsl_nat_warning(cfg, monkeypatch, capsys):
     monkeypatch.setattr(inst, "is_wsl", lambda: True)
     monkeypatch.setattr(inst, "wsl_networking_mode", lambda: "nat")

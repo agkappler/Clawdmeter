@@ -11,8 +11,7 @@ Events come from daemon/tests/fixtures/hooks/ (real, scrubbed captures).
   python3 tools/post_fixture_hooks.py clear     # end every session this tool created
 
 Needs `sessions = on` in the daemon config. The token is read from the
-daemon's `sessions-token` file unless --token is given. From a remote, pass
---token and --daemon <the daemon machine's tailnet name>.
+daemon's `sessions-token` file unless --token is given.
 """
 
 import argparse
@@ -44,7 +43,7 @@ def fixture(name: str, sid: str, cwd: str) -> dict:
 
 def post(args, host: str, event: dict) -> None:
     req = urllib.request.Request(
-        f"http://{args.daemon}:{args.port}/hook/{host}",
+        f"http://127.0.0.1:{args.port}/hook/{host}",
         data=json.dumps(event).encode(),
         headers={"Content-Type": "application/json", "X-Clawdmeter-Token": args.token},
         method="POST",
@@ -55,7 +54,7 @@ def post(args, host: str, event: dict) -> None:
     except urllib.error.HTTPError as e:
         status = e.code
     except OSError as e:
-        sys.exit(f"Can't reach the receiver at {args.daemon}:{args.port}: {e}. Is the daemon running with sessions = on?")
+        sys.exit(f"Can't reach the receiver on port {args.port}: {e}. Is the daemon running with sessions = on?")
     if status != 204:
         sys.exit(f"Receiver answered {status} (403 usually means a wrong token)")
     print(f"  {host:8} {event['session_id'][len(PREFIX):]:10} {event['hook_event_name']}"
@@ -100,7 +99,6 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("scenario", choices=["demo", "many", "replay", "clear"])
     p.add_argument("--port", type=int, default=47123)
-    p.add_argument("--daemon", default="127.0.0.1", help="the daemon machine's tailnet name, from a remote")
     p.add_argument("--token", help="defaults to the daemon's sessions-token file")
     p.add_argument("--speed", type=float, default=1.0, help="replay speed-up factor")
     args = p.parse_args()

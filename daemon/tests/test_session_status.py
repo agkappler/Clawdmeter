@@ -8,6 +8,7 @@ Run: python -m pytest daemon/tests/test_session_status.py -q
 """
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -427,7 +428,8 @@ def test_start_from_config_creates_private_token(tmp_path):
     assert asyncio.run(go()) is not None
     token_file = tmp_path / "sessions-token"
     assert len(token_file.read_text().strip()) == 32
-    assert token_file.stat().st_mode & 0o077 == 0
+    if sys.platform != "win32":   # Windows has no Unix mode bits; the file inherits the profile's ACL
+        assert token_file.stat().st_mode & 0o077 == 0
     assert ss.load_or_create_token(token_file) == token_file.read_text().strip()
 
 

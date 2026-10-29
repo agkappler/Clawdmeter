@@ -99,6 +99,12 @@ Host devbox
     RemoteForward 47123 127.0.0.1:47123
 ```
 
+The tunnel is the only route. Claude Code refuses `http` hooks to any address
+other than loopback (a LAN or Tailscale `100.x` address is "blocked: private
+address"), and listing the URL in `allowedHttpHookUrls` doesn't lift that. So a
+remote can't post straight to the daemon machine's address, even on the same
+tailnet. If you SSH over Tailscale, the tunnel already runs inside it.
+
 Useful options:
 
 - `--host` sets the short machine tag (8 characters at most).

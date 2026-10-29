@@ -4,7 +4,7 @@
 Run it on every machine you use Claude Code on: native Windows, macOS, Linux,
 inside WSL, and on SSH remotes. It adds Claude Code's built-in `http` hooks to
 `settings.json`, which POST each session event to the Clawdmeter daemon's
-receiver on 127.0.0.1, or on the daemon machine's tailnet name. Other hooks in the file are left alone, and running it
+receiver on 127.0.0.1. Other hooks in the file are left alone, and running it
 again just refreshes its own entries. It also installs a `/park` skill, which
 hides the current session from the device until its next prompt.
 
@@ -14,9 +14,6 @@ hides the current session from the device until its next prompt.
   # In WSL (needs mirrored networking) or on an SSH remote, pass the token
   # from the daemon machine's `sessions-token` file:
   python3 install_session_hooks.py --host devbox --token <token> --remote
-
-  # On a remote on the same tailnet as a daemon machine running `tailscale serve`:
-  python3 install_session_hooks.py --host mini --token <token> --daemon desktop.tailnet.ts.net
 
   python3 tools/install_session_hooks.py --uninstall
 
@@ -143,14 +140,14 @@ def default_config_dirs() -> list[Path]:
 
 # -- settings.json -----------------------------------------------------------------
 
-def hook_url(port: int, host: str, daemon: str = "127.0.0.1") -> str:
-    return f"http://{daemon}:{port}/hook/{host}"
+def hook_url(port: int, host: str) -> str:
+    return f"http://127.0.0.1:{port}/hook/{host}"
 
 
-def our_hook(port: int, host: str, token: str, daemon: str = "127.0.0.1") -> dict:
+def our_hook(port: int, host: str, token: str) -> dict:
     return {
         "type": "http",
-        "url": hook_url(port, host, daemon),
+        "url": hook_url(port, host),
         "timeout": TIMEOUT,
         "headers": {TOKEN_HEADER: token},
     }
@@ -191,10 +188,10 @@ def strip_ours(settings: dict) -> int:
     return removed
 
 
-def add_ours(settings: dict, port: int, host: str, token: str, daemon: str = "127.0.0.1") -> None:
+def add_ours(settings: dict, port: int, host: str, token: str) -> None:
     hooks = settings.setdefault("hooks", {})
     for event in EVENTS:
-        hooks.setdefault(event, []).append({"hooks": [our_hook(port, host, token, daemon)]})
+        hooks.setdefault(event, []).append({"hooks": [our_hook(port, host, token)]})
 
 
 def load_settings(path: Path) -> dict:
@@ -311,9 +308,6 @@ def main(argv: list[str] | None = None) -> int:
                         "(default: $CLAUDE_CONFIG_DIR or ~/.claude)")
     p.add_argument("--remote", action="store_true",
                    help="this is an SSH remote: print the RemoteForward line to add on your machine")
-    p.add_argument("--daemon", default="127.0.0.1",
-                   help="where the daemon's receiver is: its machine's tailnet name when that machine "
-                        "runs `tailscale serve` for the port (default: 127.0.0.1)")
     p.add_argument("--uninstall", action="store_true", help="remove the Clawdmeter hooks")
     p.add_argument("--dry-run", action="store_true", help="print the result instead of writing it")
     args = p.parse_args(argv)
@@ -335,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(f"Using the token from {source}")
 
-    url = hook_url(args.port, host, args.daemon)
+    url = hook_url(args.port, host)
     for config_dir in config_dirs:
         path = config_dir / "settings.json"
         try:
@@ -345,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         removed = strip_ours(settings)
         if not args.uninstall:
-            add_ours(settings, args.port, host, token, args.daemon)
+            add_ours(settings, args.port, host, token)
         if args.dry_run:
             print(f"--- {path}")
             print(json.dumps(settings, indent=2))
@@ -377,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
                   "  %UserProfile%\\.wslconfig, then run `wsl --shutdown`.")
         elif mode is None:
             print("note: couldn't tell WSL's networking mode; these hooks need mirrored networking.")
-    if args.remote and args.daemon == "127.0.0.1":
+    if args.remote:
         print("\nOn the machine running the daemon, add this under this remote's `Host` entry in\n"
               f"~/.ssh/config, then reconnect:\n\n    RemoteForward {args.port} 127.0.0.1:{args.port}\n")
     print("Claude Code picks up settings changes without a restart.")
