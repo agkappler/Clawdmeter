@@ -142,6 +142,15 @@ def test_remote_prints_forward_line(cfg, capsys):
     assert "RemoteForward 47200 127.0.0.1:47200" in capsys.readouterr().out
 
 
+def test_daemon_name_replaces_loopback_entries(cfg, capsys):
+    run(cfg, "--host", "mini", "--token", "t")
+    run(cfg, "--host", "mini", "--token", "t", "--daemon", "desk.tail.ts.net", "--remote")
+    found = ours(settings(cfg))
+    assert len(found) == len(inst.EVENTS)
+    assert {h["url"] for _, h in found} == {"http://desk.tail.ts.net:47123/hook/mini"}
+    assert "RemoteForward" not in capsys.readouterr().out
+
+
 def test_wsl_nat_warning(cfg, monkeypatch, capsys):
     monkeypatch.setattr(inst, "is_wsl", lambda: True)
     monkeypatch.setattr(inst, "wsl_networking_mode", lambda: "nat")
@@ -160,3 +169,36 @@ def test_installed_hooks_are_accepted_by_the_real_receiver(cfg):
     headers = {k.lower(): v for k, v in hook["headers"].items()}
     headers["content-type"] = "application/json"   # Claude Code sets this itself
     assert ss.check_request("POST", path, headers, "tok") == (204, "devbox")
+
+
+def test_park_skill_parks_this_session_through_the_installed_hook(cfg):
+    import asyncio
+    import subprocess
+    import sys
+    from daemon import session_status as ss
+
+    async def go():
+        t = ss.SessionTracker(None, log=lambda m: None)
+        t.handle_event("devbox", {"hook_event_name": "Stop", "session_id": "s1", "cwd": "/p/x"})
+        rx = ss.Receiver(t, "tok", log=lambda m: None)
+        assert await rx.start(0)
+        port = rx.server.sockets[0].getsockname()[1]
+        run(cfg, "--host", "devbox", "--token", "tok", "--port", str(port))
+        script = inst.park_skill_dir(cfg) / "park.py"
+        out = await asyncio.to_thread(subprocess.run, [sys.executable, str(script), "s1"],
+                                      capture_output=True, text=True)
+        rx.server.close()
+        return t, out
+
+    t, out = asyncio.run(go())
+    assert out.returncode == 0, out.stderr
+    assert t.rows() == []
+    skill = (inst.park_skill_dir(cfg) / "SKILL.md").read_text()
+    assert "${CLAUDE_SESSION_ID}" in skill and "disable-model-invocation: true" in skill
+
+
+def test_uninstall_removes_park_skill(cfg):
+    run(cfg, "--host", "a", "--token", "t")
+    assert inst.park_skill_dir(cfg).exists()
+    run(cfg, "--uninstall")
+    assert not inst.park_skill_dir(cfg).exists()

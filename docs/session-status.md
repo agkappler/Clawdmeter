@@ -144,6 +144,27 @@ python3 tools/post_fixture_hooks.py demo    # 5 sessions across hosts, one needi
 python3 tools/post_fixture_hooks.py clear   # remove them
 ```
 
+## Removing a session from the list
+
+Exiting a session with `/exit` or Ctrl+D removes its row. To remove rows
+yourself, run this on the daemon machine:
+
+```bash
+python tools/sessions.py              # numbered list, in the device's order
+python tools/sessions.py end 2        # remove row 2 (several numbers work too)
+python tools/sessions.py end 626bc8c5 # or by session id prefix
+```
+
+Use it for rows left behind by a restart or a closed window. It only removes
+the row: the session's next event adds it back, and that includes Claude Code's
+idle reminder about a minute after a turn ends.
+
+To step away from a live session, type `/park` in it instead. The installer
+adds this skill alongside the hooks on every machine. The session's row stays
+hidden until your next prompt there, and the events in between (the `/park`
+turn itself, the idle reminder) are ignored. It runs one short command, so it
+costs one quick turn.
+
 ## Troubleshooting
 
 **Nothing appears**

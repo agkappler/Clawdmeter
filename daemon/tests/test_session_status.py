@@ -193,6 +193,42 @@ def test_at_most_six_rows():
     assert len(t.rows()) == ss.MAX_SESSIONS
 
 
+def test_listing_covers_every_session_in_row_order():
+    t = tracker()
+    for i in range(10):
+        t.handle_event("mac", fx("PreToolUse", session_id=str(i), cwd=f"/p/s{i}"))
+    t.handle_event("mac", fx("PermissionRequest", session_id="7"))
+    listing = t.listing()
+    assert len(listing) == 10
+    assert [{"h": e.host, "n": n, "s": s} for e, n, s in listing[:ss.MAX_SESSIONS]] == t.rows()
+    assert listing[0][0].sid == "7"
+
+
+def test_park_hides_until_the_next_prompt():
+    t = tracker()
+    t.handle_event("mini", fx("UserPromptSubmit", session_id="p"))
+    t.handle_event("mini", fx("PreToolUse", session_id="p"))
+    t.handle_event("mini", {"hook_event_name": ss.PARK_EVENT, "session_id": "p"})
+    for name in ("PostToolUse", "Stop", "Notification-idle_prompt"):
+        t.handle_event("mini", fx(name, session_id="p"))
+    assert t.rows() == [] and t.total() == 0
+    t.handle_event("mini", fx("UserPromptSubmit", session_id="p"))
+    assert states(t) == [WORKING]
+
+
+def test_parked_session_still_ends_and_survives_restart(tmp_path):
+    t = tracker(tmp_path)
+    t.handle_event("mini", fx("Stop", session_id="p"))
+    t.handle_event("mini", {"hook_event_name": ss.PARK_EVENT, "session_id": "p"})
+    t2 = tracker(tmp_path)
+    t2.load()
+    t2.handle_event("mini", fx("Stop", session_id="p"))
+    assert t2.rows() == []
+    t2.handle_event("mini", fx("SessionEnd", session_id="p"))
+    t2.handle_event("mini", fx("Stop", session_id="p"))
+    assert states(t2) == [YOUR_TURN]
+
+
 def test_total_sent_only_when_rows_are_cut():
     t = tracker()
     for i in range(4):

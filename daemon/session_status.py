@@ -46,6 +46,8 @@ TOKEN_HEADER = "x-clawdmeter-token"
 WORKING, NEEDS_YOU, YOUR_TURN, STALE = 0, 1, 2, 3
 PRIORITY = {NEEDS_YOU: 0, YOUR_TURN: 1, WORKING: 2, STALE: 3}
 REMOVE = -1
+PARK = -2
+PARK_EVENT = "ClawdmeterPark"   # sent by the /park skill, not by Claude Code
 
 # notification_type → state. Anything not listed is ignored: the list grows
 # with Claude Code releases and most new types are informational.
@@ -68,6 +70,7 @@ _EVENT_STATES = {
     "Stop": YOUR_TURN,
     "StopFailure": YOUR_TURN,
     "SessionEnd": REMOVE,
+    PARK_EVENT: PARK,
 }
 
 _HOST_RE = re.compile(r"[^A-Za-z0-9_-]")
@@ -127,6 +130,7 @@ class Entry:
     state: int
     first_seen: float   # wall clock, so it survives a restart
     updated: float
+    parked: bool = False   # hidden until the next UserPromptSubmit
 
 
 class SessionTracker:
@@ -156,13 +160,23 @@ class SessionTracker:
             return False
         key = (host_tag(host), sid)
         now = self._clock()
+        entry = self._entries.get(key)
         if state == REMOVE:
             self._entries.pop(key, None)
+        elif state == PARK:
+            if entry is None:
+                entry = Entry(key[0], sid, fields["cwd_name"], None, YOUR_TURN, now, now)
+                self._entries[key] = entry
+            entry.parked = True
+            entry.updated = now
+        elif entry is not None and entry.parked and fields["event"] != "UserPromptSubmit":
+            # The /park turn's own Stop, and the idle reminder after it, must not bring it back.
+            return False
         else:
-            entry = self._entries.get(key)
             if entry is None:
                 entry = Entry(key[0], sid, fields["cwd_name"], None, state, now, now)
                 self._entries[key] = entry
+            entry.parked = False
             entry.state = state
             entry.updated = now
             if fields["cwd_name"]:
@@ -190,6 +204,11 @@ class SessionTracker:
 
     def rows(self) -> list[dict]:
         """Visible rows, sorted and labelled, at most MAX_SESSIONS."""
+        return [{"h": e.host, "n": label, "s": state}
+                for e, label, state in self.listing()[:MAX_SESSIONS]]
+
+    def listing(self) -> list[tuple[Entry, str, int]]:
+        """Every unparked session as (entry, label, shown state), in device order."""
         now = self._clock()
         self._prune(now)
 
@@ -202,7 +221,8 @@ class SessionTracker:
         # "api#2" keep their names as other sessions come and go.
         labels: dict[tuple[str, str], str] = {}
         counts: dict[tuple[str, str], int] = {}
-        for e in sorted(self._entries.values(), key=lambda e: e.first_seen):
+        shown = [e for e in self._entries.values() if not e.parked]
+        for e in sorted(shown, key=lambda e: e.first_seen):
             base = ascii_fold(e.title or e.cwd_name or "session", NAME_MAX) or "session"
             n = counts.get((e.host, base), 0) + 1
             counts[(e.host, base)] = n
@@ -211,15 +231,14 @@ class SessionTracker:
                 base = base[: NAME_MAX - len(suffix)] + suffix
             labels[(e.host, e.sid)] = base
 
-        ordered = sorted(self._entries.values(),
+        ordered = sorted(shown,
                          key=lambda e: (PRIORITY[shown_state(e)], e.first_seen))
-        return [{"h": e.host, "n": labels[(e.host, e.sid)], "s": shown_state(e)}
-                for e in ordered[:MAX_SESSIONS]]
+        return [(e, labels[(e.host, e.sid)], shown_state(e)) for e in ordered]
 
     def total(self) -> int:
         """Live sessions, including any beyond the MAX_SESSIONS sent."""
         self._prune(self._clock())
-        return len(self._entries)
+        return sum(not e.parked for e in self._entries.values())
 
     def payload(self, limit: int) -> bytes:
         """The "ss" write, dropping whole rows from the end until it fits.

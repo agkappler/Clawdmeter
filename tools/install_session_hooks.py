@@ -4,8 +4,9 @@
 Run it on every machine you use Claude Code on: native Windows, macOS, Linux,
 inside WSL, and on SSH remotes. It adds Claude Code's built-in `http` hooks to
 `settings.json`, which POST each session event to the Clawdmeter daemon's
-receiver on 127.0.0.1. Other hooks in the file are left alone, and running it
-again just refreshes its own entries.
+receiver on 127.0.0.1, or on the daemon machine's tailnet name. Other hooks in the file are left alone, and running it
+again just refreshes its own entries. It also installs a `/park` skill, which
+hides the current session from the device until its next prompt.
 
   # On the machine running the daemon (after `sessions = on` + a daemon restart):
   python3 tools/install_session_hooks.py
@@ -13,6 +14,9 @@ again just refreshes its own entries.
   # In WSL (needs mirrored networking) or on an SSH remote, pass the token
   # from the daemon machine's `sessions-token` file:
   python3 install_session_hooks.py --host devbox --token <token> --remote
+
+  # On a remote on the same tailnet as a daemon machine running `tailscale serve`:
+  python3 install_session_hooks.py --host mini --token <token> --daemon desktop.tailnet.ts.net
 
   python3 tools/install_session_hooks.py --uninstall
 
@@ -139,14 +143,14 @@ def default_config_dirs() -> list[Path]:
 
 # -- settings.json -----------------------------------------------------------------
 
-def hook_url(port: int, host: str) -> str:
-    return f"http://127.0.0.1:{port}/hook/{host}"
+def hook_url(port: int, host: str, daemon: str = "127.0.0.1") -> str:
+    return f"http://{daemon}:{port}/hook/{host}"
 
 
-def our_hook(port: int, host: str, token: str) -> dict:
+def our_hook(port: int, host: str, token: str, daemon: str = "127.0.0.1") -> dict:
     return {
         "type": "http",
-        "url": hook_url(port, host),
+        "url": hook_url(port, host, daemon),
         "timeout": TIMEOUT,
         "headers": {TOKEN_HEADER: token},
     }
@@ -187,10 +191,10 @@ def strip_ours(settings: dict) -> int:
     return removed
 
 
-def add_ours(settings: dict, port: int, host: str, token: str) -> None:
+def add_ours(settings: dict, port: int, host: str, token: str, daemon: str = "127.0.0.1") -> None:
     hooks = settings.setdefault("hooks", {})
     for event in EVENTS:
-        hooks.setdefault(event, []).append({"hooks": [our_hook(port, host, token)]})
+        hooks.setdefault(event, []).append({"hooks": [our_hook(port, host, token, daemon)]})
 
 
 def load_settings(path: Path) -> dict:
@@ -212,6 +216,70 @@ def write_settings(path: Path, settings: dict) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+
+
+# -- /park skill -------------------------------------------------------------------
+
+PARK_SKILL = "park"
+
+PARK_SCRIPT = """\
+import json, sys, urllib.request
+from pathlib import Path
+
+sid = sys.argv[1] if len(sys.argv) > 1 else ""
+if not sid or "CLAUDE_SESSION_ID" in sid:
+    sys.exit("No session id: this Claude Code version doesn't substitute ${CLAUDE_SESSION_ID} in skills")
+settings = json.loads((Path(__file__).resolve().parents[2] / "settings.json").read_text(encoding="utf-8"))
+hook = next((h for groups in settings.get("hooks", {}).values() for g in groups for h in g.get("hooks", [])
+             if h.get("type") == "http" and "%(header)s" in (h.get("headers") or {})), None)
+if hook is None:
+    sys.exit("No Clawdmeter hooks in settings.json; run install_session_hooks.py")
+req = urllib.request.Request(hook["url"], method="POST", headers=dict(hook["headers"], **{"Content-Type": "application/json"}),
+                             data=json.dumps({"hook_event_name": "ClawdmeterPark", "session_id": sid}).encode())
+try:
+    urllib.request.urlopen(req, timeout=3).close()
+except OSError as e:
+    sys.exit(f"Couldn't reach the Clawdmeter daemon: {e}")
+print("Parked")
+"""
+
+PARK_SKILL_MD = """\
+---
+name: park
+description: Hide this session from the Clawdmeter until your next prompt.
+disable-model-invocation: true
+allowed-tools: Bash
+---
+Run this command once, exactly as written:
+
+```
+"%(python)s" "%(script)s" "${CLAUDE_SESSION_ID}"
+```
+
+Then reply with only its output. Do nothing else.
+"""
+
+
+def park_skill_dir(config_dir: Path) -> Path:
+    return config_dir / "skills" / PARK_SKILL
+
+
+def write_park_skill(config_dir: Path) -> Path:
+    d = park_skill_dir(config_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    script = d / "park.py"
+    script.write_text(PARK_SCRIPT % {"header": TOKEN_HEADER}, encoding="utf-8")
+    (d / "SKILL.md").write_text(PARK_SKILL_MD % {"python": Path(sys.executable).as_posix(),
+                                                 "script": script.as_posix()}, encoding="utf-8")
+    return d
+
+
+def remove_park_skill(config_dir: Path) -> bool:
+    d = park_skill_dir(config_dir)
+    if not (d / "park.py").exists():
+        return False
+    shutil.rmtree(d)
+    return True
 
 
 # -- checks ------------------------------------------------------------------------
@@ -243,6 +311,9 @@ def main(argv: list[str] | None = None) -> int:
                         "(default: $CLAUDE_CONFIG_DIR or ~/.claude)")
     p.add_argument("--remote", action="store_true",
                    help="this is an SSH remote: print the RemoteForward line to add on your machine")
+    p.add_argument("--daemon", default="127.0.0.1",
+                   help="where the daemon's receiver is: its machine's tailnet name when that machine "
+                        "runs `tailscale serve` for the port (default: 127.0.0.1)")
     p.add_argument("--uninstall", action="store_true", help="remove the Clawdmeter hooks")
     p.add_argument("--dry-run", action="store_true", help="print the result instead of writing it")
     args = p.parse_args(argv)
@@ -264,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(f"Using the token from {source}")
 
-    url = hook_url(args.port, host)
+    url = hook_url(args.port, host, args.daemon)
     for config_dir in config_dirs:
         path = config_dir / "settings.json"
         try:
@@ -274,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         removed = strip_ours(settings)
         if not args.uninstall:
-            add_ours(settings, args.port, host, token)
+            add_ours(settings, args.port, host, token, args.daemon)
         if args.dry_run:
             print(f"--- {path}")
             print(json.dumps(settings, indent=2))
@@ -285,8 +356,11 @@ def main(argv: list[str] | None = None) -> int:
         write_settings(path, settings)
         if args.uninstall:
             print(f"{path}: removed {removed} Clawdmeter hook(s)")
+            if remove_park_skill(config_dir):
+                print(f"{park_skill_dir(config_dir)}: removed the /park skill")
         else:
             print(f"{path}: installed {len(EVENTS)} hooks -> {url}")
+            print(f"{write_park_skill(config_dir)}: installed the /park skill")
 
     if args.uninstall:
         return 0
@@ -303,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
                   "  %UserProfile%\\.wslconfig, then run `wsl --shutdown`.")
         elif mode is None:
             print("note: couldn't tell WSL's networking mode; these hooks need mirrored networking.")
-    if args.remote:
+    if args.remote and args.daemon == "127.0.0.1":
         print("\nOn the machine running the daemon, add this under this remote's `Host` entry in\n"
               f"~/.ssh/config, then reconnect:\n\n    RemoteForward {args.port} 127.0.0.1:{args.port}\n")
     print("Claude Code picks up settings changes without a restart.")
