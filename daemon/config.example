@@ -73,3 +73,6 @@ quote_of_day = off
 # next to this file on first start.
 sessions = off
 # sessions_port = 47123
+# Minutes a finished turn shows as "needs you" before it reads "your turn".
+# 0 turns it off.
+# your_turn_alert = 2

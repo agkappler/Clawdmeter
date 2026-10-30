@@ -6,7 +6,7 @@ for your next prompt (**your turn**), which have gone quiet (**stale**), and
 which you've set aside with `/park` (**parked**). Colors: **red** needs you,
 **gold** your turn, **teal** working, gray stale, dark gray parked.
 A session that just finished its turn also shows as **needs you** for its first
-5 minutes, then drops to your turn: a finished turn often means there's
+2 minutes, then drops to your turn: a finished turn often means there's
 something for you to look at.
 When a session newly needs you, the screen border blinks red until you tap
 the list or answer the prompt.
@@ -60,7 +60,7 @@ Add this to the daemon config, then restart the daemon:
 ```ini
 sessions = on
 # sessions_port = 47123   # only if something else uses this port
-# your_turn_alert = 5     # minutes a finished turn shows as "needs you"; 0 turns it off
+# your_turn_alert = 2     # minutes a finished turn shows as "needs you"; 0 turns it off
 ```
 
 On start the daemon logs `Sessions: listening on 127.0.0.1:47123` and creates
