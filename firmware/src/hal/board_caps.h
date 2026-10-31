@@ -22,6 +22,8 @@ struct BoardCaps {
     bool    has_media_controls;  // renders the bottom media/volume touch bar on the usage screen
     bool    has_session_list;    // shows Claude Code sessions (openspec add-session-status): a
                                  // center-band list on tall boards, a badge + tap-to-open list on round ones
+    bool    no_pwr_button;       // no PWR key (BOOT + hardware RESET only): no hold-to-pair, so the
+                                 // pairing hint points at the computer's Bluetooth settings instead
 };
 
 const BoardCaps& board_caps(void);

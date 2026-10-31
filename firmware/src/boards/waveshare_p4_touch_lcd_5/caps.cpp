@@ -12,6 +12,7 @@ static const BoardCaps caps = {
     .is_round = false,
     .has_media_controls = true,
     .has_session_list = true,
+    .no_pwr_button = true,      // BOOT + RESET only
 };
 
 const BoardCaps& board_caps(void) { return caps; }

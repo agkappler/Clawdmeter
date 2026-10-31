@@ -11,6 +11,7 @@ static const BoardCaps caps = {
     .has_imu = true,
     .is_round = true,
     .has_session_list = true,   // round style: ring badge + tap-to-open list
+    .no_pwr_button = true,      // BOOT + RESET only
 };
 
 const BoardCaps& board_caps(void) { return caps; }

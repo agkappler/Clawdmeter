@@ -1870,9 +1870,15 @@ static void build_pair_group(lv_obj_t* parent) {
     // Round panels are widest near the vertical center and narrow toward the
     // top edge, so the three lines sit lower (and closer together) than on a
     // rectangular panel to stay clear of the circular bezel.
-    int16_t y1 = L.is_round ? 90  : 40;
-    int16_t y2 = L.is_round ? 160 : 120;
-    int16_t y3 = L.is_round ? 200 : 160;
+    // On round boards the status line (lbl_anim) sits dead center, so the hint
+    // stays above it rather than straddling it.
+    int16_t y1 = L.is_round ? 62  : 40;
+    int16_t y2 = L.is_round ? 108 : 120;
+    int16_t y3 = L.is_round ? 136 : 160;
+
+    // Boards without a PWR key can't do hold-to-pair; pairing starts from the
+    // computer instead.
+    const bool no_pwr = board_caps().no_pwr_button;
 
     lv_obj_t* l1 = lv_label_create(pair_group);
     lv_label_set_text(l1, "To pair");
@@ -1881,13 +1887,13 @@ static void build_pair_group(lv_obj_t* parent) {
     lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, y1);
 
     lv_obj_t* l2 = lv_label_create(pair_group);
-    lv_label_set_text(l2, "hold the power button");
+    lv_label_set_text(l2, no_pwr ? "open Bluetooth settings" : "hold the power button");
     lv_obj_set_style_text_font(l2, L.bt_device_font, 0);
     lv_obj_set_style_text_color(l2, COL_DIM, 0);
     lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, y2);
 
     lv_obj_t* l3 = lv_label_create(pair_group);
-    lv_label_set_text(l3, "for 3 seconds, then release");
+    lv_label_set_text(l3, no_pwr ? "on your computer" : "for 3 seconds, then release");
     lv_obj_set_style_text_font(l3, L.bt_device_font, 0);
     lv_obj_set_style_text_color(l3, COL_DIM, 0);
     lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, y3);
