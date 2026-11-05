@@ -5,6 +5,7 @@
 #include "logo.h"
 #include "icons.h"
 #include "hal/board_caps.h"
+#include "idle.h"
 
 // Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI)
 LV_FONT_DECLARE(font_tiempos_56);
@@ -1785,7 +1786,10 @@ static void sess_track_needs(void) {
     }
     memcpy(sess_needs_prev, now_keys, sizeof(now_keys));
     sess_needs_prev_n = n;
-    if (any_new) sess_cue_on = true;
+    if (any_new) {
+        sess_cue_on = true;
+        idle_note_activity();
+    }
     if (n == 0)  sess_cue_on = false;
 }
 
